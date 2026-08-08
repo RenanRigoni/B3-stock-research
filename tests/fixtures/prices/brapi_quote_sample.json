@@ -1,0 +1,11 @@
+{
+  "results": [
+    {
+      "symbol": "PETR4",
+      "historicalDataPrice": [
+        {"date": 1704153600, "open": 37.8, "high": 38.2, "low": 37.6, "close": 38.0, "volume": 24000000},
+        {"date": 1704240000, "open": 38.2, "high": 38.7, "low": 38.0, "close": 38.5, "volume": 25000000}
+      ]
+    }
+  ]
+}

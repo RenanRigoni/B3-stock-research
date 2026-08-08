@@ -20,6 +20,8 @@ dependencies = [
     "pandas>=2.2",
     "pyarrow>=18.0",
     "numpy>=2.1",
+    # yfinance repair=True usa interpolacao do scipy (fase1.md 10).
+    "scipy>=1.14",
     # Banco (Supabase Postgres)
     "psycopg[binary]>=3.2",
     # Fontes externas

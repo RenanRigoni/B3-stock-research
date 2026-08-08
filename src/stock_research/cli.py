@@ -11,7 +11,7 @@ Um stub nunca finge sucesso.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
@@ -160,6 +160,24 @@ def add_company(ticker: str) -> None:
     _not_implemented(1, f"cadastro incremental de {ticker}")
 
 
+def _print_pipeline_summary(result: dict[str, Any], title: str) -> None:
+    table = Table(title=title, show_header=True, header_style="bold")
+    for col in ("Ticker", "Status", "Detalhe"):
+        table.add_column(col)
+    for ticker, outcome in result["results"].items():
+        if outcome.get("status") == "failed":
+            table.add_row(ticker, "[red]FALHOU[/]", str(outcome.get("error", "")))
+        else:
+            detail = (
+                f"{outcome.get('rows', 0)} precos, {outcome.get('actions', 0)} acoes corp., "
+                f"{outcome.get('quality_findings', 0)} achado(s)"
+            )
+            table.add_row(ticker, "[green]OK[/]", detail)
+    console.print(table)
+    if result["failed"]:
+        console.print(f"[red]Falharam: {', '.join(result['failed'])}[/]")
+
+
 @app.command(name="sync-prices")
 def sync_prices(
     ticker: Annotated[str | None, typer.Option("--ticker")] = None,
@@ -168,16 +186,30 @@ def sync_prices(
     end: Annotated[str | None, typer.Option("--end")] = None,
     force: Annotated[bool, typer.Option("--force", help="Ignora cache e rebaixa.")] = False,
 ) -> None:
-    """Backfill de precos historicos."""
-    _not_implemented(1, "backfill de precos via yfinance")
+    """Backfill de precos historicos (fase1.md 18)."""
+    if not ticker and not all_tickers:
+        console.print("[red]Informe --ticker TICKER ou --all.[/]")
+        raise typer.Exit(code=2)
+
+    from stock_research.pipelines.prices import sync_prices as run_sync_prices
+
+    result = run_sync_prices(ticker=ticker, all_tickers=all_tickers, start=start, end=end, force=force)
+    _print_pipeline_summary(result, "sync-prices")
+    if result["failed"]:
+        raise typer.Exit(code=1)
 
 
 @app.command(name="update-prices")
 def update_prices(
     ticker: Annotated[str | None, typer.Option("--ticker")] = None,
 ) -> None:
-    """Atualizacao incremental de precos."""
-    _not_implemented(1, "update incremental de precos")
+    """Atualizacao incremental de precos (fase1.md 19)."""
+    from stock_research.pipelines.prices import update_prices as run_update_prices
+
+    result = run_update_prices(ticker=ticker)
+    _print_pipeline_summary(result, "update-prices")
+    if result["failed"]:
+        raise typer.Exit(code=1)
 
 
 @app.command(name="validate-prices")
@@ -185,8 +217,17 @@ def validate_prices(
     ticker: Annotated[str, typer.Option("--ticker")],
     days: Annotated[int, typer.Option("--days")] = 60,
 ) -> None:
-    """Validacao cruzada de precos entre provedores."""
-    _not_implemented(3, "validacao cruzada yfinance x brapi")
+    """Validacao cruzada de precos entre provedores (fase1.md 21)."""
+    from stock_research.pipelines.validation import run_price_validation
+
+    result = run_price_validation(ticker=ticker, days=days)
+    if result.get("skipped"):
+        console.print(f"[yellow]Validacao pulada:[/] {result['reason']}")
+        return
+
+    console.print(f"[green]{result['compared']} data(s) comparada(s)[/] para {ticker.upper()}")
+    for status, count in result["by_status"].items():
+        console.print(f"  {status}: {count}")
 
 
 @app.command(name="sync-cvm")

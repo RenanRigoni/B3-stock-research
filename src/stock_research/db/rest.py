@@ -200,6 +200,28 @@ def upsert_many(
     return {"inserted": total, "updated": 0, "total": total}
 
 
+def insert_many(table: str, rows: list[dict[str, Any]], *, batch_size: int = REST_BATCH_SIZE) -> int:
+    """``INSERT`` simples via POST, sem ``Prefer`` de resolucao (sem ON CONFLICT).
+
+    Espelha ``connection.insert_many``: usar so em tabelas sem chave natural.
+    """
+    if not rows:
+        return 0
+
+    total = 0
+    for start in range(0, len(rows), batch_size):
+        chunk = rows[start : start + batch_size]
+        _request(
+            "POST",
+            f"/rest/v1/{table}",
+            headers=_headers({"Prefer": "return=minimal"}),
+            content=json.dumps(chunk, ensure_ascii=False, default=str),
+        )
+        total += len(chunk)
+    logger.debug("insert REST %s: %d linhas", table, total)
+    return total
+
+
 def insert_returning(table: str, row: dict[str, Any]) -> dict[str, Any]:
     """INSERT de uma linha devolvendo o registro criado (para pegar o id)."""
     response = _request(

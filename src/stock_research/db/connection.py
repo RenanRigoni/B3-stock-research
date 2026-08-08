@@ -180,6 +180,33 @@ def upsert_many(
     return {"inserted": inserted, "updated": updated, "total": total}
 
 
+def insert_many(table: str, rows: Sequence[dict[str, Any]], *, batch_size: int = DEFAULT_BATCH_SIZE) -> int:
+    """``INSERT`` simples, sem ``ON CONFLICT``.
+
+    Para tabelas sem chave natural (ex.: ``data_changes``), onde a idempotencia
+    vem da logica de quem chama (so inserimos quando ha diferenca real) e nao
+    de uma constraint UNIQUE.
+    """
+    if not rows:
+        return 0
+
+    columns = list(rows[0].keys())
+    ident = sql.Identifier
+    statement = sql.SQL("insert into public.{table} ({cols}) values ({placeholders})").format(
+        table=ident(table),
+        cols=sql.SQL(", ").join(ident(c) for c in columns),
+        placeholders=sql.SQL(", ").join(sql.Placeholder() * len(columns)),
+    )
+
+    with connection() as conn, conn.cursor() as cur:
+        for start in range(0, len(rows), batch_size):
+            chunk = rows[start : start + batch_size]
+            cur.executemany(statement, [[_adapt(row.get(c)) for c in columns] for row in chunk])
+
+    logger.debug("insert %s: %d linhas", table, len(rows))
+    return len(rows)
+
+
 # ---------------------------------------------------------------------------
 # Linhagem (fase1.md 64)
 # ---------------------------------------------------------------------------

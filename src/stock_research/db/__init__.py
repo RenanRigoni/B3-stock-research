@@ -117,6 +117,25 @@ def upsert_many(
     return rest.upsert_many(table, rows, conflict_columns, update_columns, **kwargs)
 
 
+def insert_many(table: str, rows: list[dict[str, Any]]) -> int:
+    """``INSERT`` em lote sem ``ON CONFLICT``.
+
+    Usar so quando a tabela nao tem chave natural (ex.: ``data_changes``) e a
+    idempotencia vem da logica de quem chama, nao de uma constraint UNIQUE.
+    """
+    if not rows:
+        return 0
+
+    if _is_pg():
+        from stock_research.db import connection as pg
+
+        return pg.insert_many(table, rows)
+
+    from stock_research.db import rest
+
+    return rest.insert_many(table, rows)
+
+
 # ---------------------------------------------------------------------------
 # Linhagem (fase1.md 64)
 # ---------------------------------------------------------------------------
@@ -279,6 +298,7 @@ __all__ = [
     "fetch_one",
     "finish_run",
     "healthcheck",
+    "insert_many",
     "record_finding",
     "start_run",
     "upsert_many",
