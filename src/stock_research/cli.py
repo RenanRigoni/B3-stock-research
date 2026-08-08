@@ -368,8 +368,17 @@ def build_events(
 def run_event_study(
     ticker: Annotated[str, typer.Option("--ticker")],
 ) -> None:
-    """Calcula retornos, retorno anormal e CAR para cada evento."""
-    _not_implemented(10, "event study")
+    """Calcula retornos, retorno anormal e CAR para cada evento (fase1.md 53-61)."""
+    from stock_research.pipelines.event_study import run_event_study as run_study
+
+    outcome = run_study(ticker)
+    if outcome.get("status") == "failed":
+        console.print(f"[red]{ticker} FALHOU[/]: {outcome.get('error')}")
+        raise typer.Exit(code=1)
+    console.print(
+        f"[green]{ticker}[/]: {outcome.get('events', 0)} evento(s) com effective_trade_date, "
+        f"{outcome.get('studies', 0)} event stud(y/ies) calculado(s)"
+    )
 
 
 @app.command()
