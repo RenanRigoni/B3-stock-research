@@ -17,7 +17,7 @@ antes do anterior fechar.
 | 8 | Classificação | Heurística + taxonomia, sem API paga obrigatória | §33–37 | ✅ |
 | 9 | Eventos | Clustering, `effective_trade_date`, confounding | §38–41, §93 | ✅ |
 | 10 | Event study | Retornos, excesso, market model, CAR | §53–60, §111 | ✅ |
-| 11 | Relatórios | `audit`, `report`, event browser, `backup` | §71–74 | ⬜ |
+| 11 | Relatórios | `audit`, `report`, `backup` | §71–74, §100 | ✅ |
 | 12 | Ponta a ponta | `pipeline`, validação em PETR4/VALE3/ITUB4, docs finais | §112–125 | ⬜ |
 
 ## O que já está pronto (Milestones 0-5)

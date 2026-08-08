@@ -383,14 +383,24 @@ def run_event_study(
 
 @app.command()
 def audit() -> None:
-    """Relatorio de qualidade de dados."""
-    _not_implemented(11, "relatorio de auditoria")
+    """Relatorio de qualidade de dados (fase1.md 72)."""
+    from stock_research.pipelines.audit import run_audit
+
+    path = run_audit()
+    console.print(f"[green]Relatorio gerado:[/] {path}")
 
 
 @app.command()
 def report(ticker: str) -> None:
-    """Relatorio HTML da empresa."""
-    _not_implemented(11, f"relatorio de {ticker}")
+    """Relatorio da empresa (fase1.md 73)."""
+    from stock_research.pipelines.report import build_report
+
+    try:
+        path = build_report(ticker)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(code=2) from exc
+    console.print(f"[green]Relatorio gerado:[/] {path}")
 
 
 @app.command()
@@ -404,8 +414,11 @@ def pipeline(
 
 @app.command()
 def backup() -> None:
-    """Dump do banco e dos dados brutos."""
-    _not_implemented(11, "backup")
+    """Copia data/raw e config para backups/ (fase1.md 100)."""
+    from stock_research.pipelines.backup import run_backup
+
+    dest = run_backup()
+    console.print(f"[green]Backup criado em:[/] {dest}")
 
 
 @app.command()
