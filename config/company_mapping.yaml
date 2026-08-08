@@ -1,0 +1,52 @@
+# Mapeamento ticker -> identificadores oficiais da CVM (fase1.md 52).
+#
+# ATENCAO: os campos abaixo estao VAZIOS DE PROPOSITO.
+#
+# CNPJ e codigo CVM sao dados oficiais. Preenche-los de memoria seria inventar
+# dado, e o projeto prefere dado ausente a dado incorreto (fase1.md 123).
+#
+# Preenchimento correto:
+#   stock-research sync-cvm --registry
+# baixa o cadastro oficial de companhias abertas
+#   https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/
+# e resolve cada ticker por razao social + CNPJ, gravando a sugestao aqui para
+# CONFERENCIA HUMANA antes de virar verdade.
+#
+# Regras de resolucao, em ordem de confianca:
+#   1. CNPJ            (identificador forte)
+#   2. codigo CVM      (identificador forte)
+#   3. ISIN            (quando disponivel)
+#   4. razao social    (fraco -- exige revisao manual)
+#
+# Uma vez confirmado, o valor fica versionado neste arquivo e nao deve ser
+# alterado automaticamente por nenhum pipeline.
+
+version: company_mapping_v1
+
+mappings:
+  PETR4:
+    cnpj: null
+    cvm_code: null
+    legal_name: null
+    isin: null
+    resolved_by: null      # cnpj | cvm_code | isin | legal_name | manual
+    confirmed: false
+    confirmed_at: null
+
+  VALE3:
+    cnpj: null
+    cvm_code: null
+    legal_name: null
+    isin: null
+    resolved_by: null
+    confirmed: false
+    confirmed_at: null
+
+  ITUB4:
+    cnpj: null
+    cvm_code: null
+    legal_name: null
+    isin: null
+    resolved_by: null
+    confirmed: false
+    confirmed_at: null

@@ -1,0 +1,77 @@
+# Universo inicial. Comecar pequeno e expandir sem mudar arquitetura (fase1.md 6).
+#
+# aliases  -> termos de busca de noticias.
+#   strong: identifica a empresa sozinho.
+#   weak:   ambiguo, gera falso positivo se usado isolado ("Vale" e substantivo
+#           comum; "PETR3" e outra classe da mesma companhia).
+#
+# flags    -> impedem aplicar metrica inadequada ao setor (fase1.md 50).
+#   NAO resolvem valuation setorial nesta fase; apenas bloqueiam uso indevido.
+
+benchmarks:
+  - ticker: IBOV
+    yahoo_symbol: "^BVSP"
+    company_name: Indice Bovespa
+    asset_type: index
+
+companies:
+  - ticker: PETR4
+    yahoo_symbol: PETR4.SA
+    company_name: Petrobras
+    legal_name: PETROLEO BRASILEIRO S.A. PETROBRAS
+    share_class: PN
+    sector: Petroleo, Gas e Biocombustiveis
+    aliases:
+      strong:
+        - Petrobras
+        - Petroleo Brasileiro
+        - PETR4
+      weak:
+        - PETR3
+        - Petrobas
+    flags:
+      commodity_exposed: true
+    notes: >
+      Estatal de controle federal. Noticias politicas e de politica de precos
+      costumam ter impacto maior que resultado operacional.
+
+  - ticker: VALE3
+    yahoo_symbol: VALE3.SA
+    company_name: Vale
+    legal_name: VALE S.A.
+    share_class: ON
+    sector: Materiais Basicos
+    aliases:
+      strong:
+        - Vale S.A.
+        - VALE3
+        - Companhia Vale do Rio Doce
+      weak:
+        # "Vale" isolado casa com "vale a pena", "vale-refeicao", nomes de cidade.
+        - Vale
+    flags:
+      commodity_exposed: true
+    notes: >
+      Exposta ao preco do minerio de ferro. Queda setorial generalizada nao deve
+      ser lida como noticia especifica da companhia (fase1.md 94).
+
+  - ticker: ITUB4
+    yahoo_symbol: ITUB4.SA
+    company_name: Itau Unibanco
+    legal_name: ITAU UNIBANCO HOLDING S.A.
+    share_class: PN
+    sector: Financeiro
+    aliases:
+      strong:
+        - Itau Unibanco
+        - ITUB4
+        - Itau Holding
+      weak:
+        - Itau
+        - ITUB3
+    flags:
+      financial_company: true
+      holding: true
+    notes: >
+      Instituicao financeira: net_debt/EBITDA, EV/EBITDA e capex nao se aplicam.
+      Serve de caso de teste para o bloqueio de metricas inadequadas.

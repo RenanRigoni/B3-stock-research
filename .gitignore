@@ -1,0 +1,69 @@
+# --- Segredos (NUNCA versionar) ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+supabase_key.txt
+*_key.txt
+*_keys.txt
+*secret*.txt
+service_role*
+
+# --- Dados (nunca versionar) ---
+# raw/ e staging/ ficam locais por design (ver docs/architecture.md).
+# Sao grandes, reproduziveis e/ou sujeitos a termos de uso das fontes.
+data/raw/
+data/staging/
+data/curated/
+data/exports/
+backups/
+*.duckdb
+*.parquet
+*.csv
+*.zip
+!tests/fixtures/**/*.csv
+!tests/fixtures/**/*.parquet
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.python-version
+
+# --- Ferramentas ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+.hypothesis/
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- Supabase CLI ---
+supabase/.branches/
+supabase/.temp/
+
+# --- Editores / SO ---
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# --- Logs ---
+logs/
+*.log

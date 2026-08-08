@@ -1,0 +1,274 @@
+# Estrutura de Desenvolvimento do Sistema de Análise de Ações
+
+## Fase 1 — Construção da base histórica
+
+Objetivo: criar uma base confiável que permita entender o comportamento passado das ações.
+
+1. Preços
+
+* Histórico diário das ações.
+* Abertura, máxima, mínima, fechamento e volume.
+* Dividendos e desdobramentos.
+* Ibovespa e índices de comparação.
+
+2. Notícias
+
+* Coleta de notícias históricas relacionadas às empresas.
+* Data e horário da publicação.
+* Fonte.
+* Empresa relacionada.
+* Classificação do assunto.
+* Sentimento da notícia.
+* Relevância estimada.
+
+3. Fundamentos
+
+* Receita.
+* Lucro.
+* Margens.
+* ROE e ROIC.
+* Dívida.
+* Fluxo de caixa.
+* Dividendos.
+* Quantidade de ações.
+* Principais múltiplos históricos.
+
+4. Event Study
+
+* Relacionar acontecimentos com movimentos das ações.
+* Medir impacto em D+1, D+5, D+20, D+60, D+252 etc.
+* Comparar o movimento com Ibovespa e setor.
+* Identificar se determinado evento realmente afetou aquela empresa.
+
+Resultado da fase:
+Uma grande base histórica capaz de responder “o que aconteceu com esta empresa, em que contexto e como o mercado reagiu?”.
+
+---
+
+## Fase 2 — Motor de valuation e qualidade
+
+Objetivo: começar a responder se determinada ação parece cara, barata ou razoavelmente precificada.
+
+1. Qualidade da empresa
+
+* Rentabilidade.
+* Crescimento.
+* Margens.
+* Endividamento.
+* Geração de caixa.
+* Consistência dos resultados.
+
+2. Valuation histórico
+
+* P/L atual versus histórico.
+* EV/EBITDA.
+* P/VP.
+* FCF Yield.
+* Earnings Yield.
+* Dividend Yield.
+* Outros múltiplos adequados ao setor.
+
+3. Valor justo
+   Utilizar diferentes metodologias:
+
+* Fluxo de Caixa Descontado.
+* Múltiplos históricos.
+* Comparação com empresas semelhantes.
+* Modelos específicos conforme o setor.
+
+4. Margem de segurança
+   Comparar:
+
+Valor estimado da empresa
+versus
+Preço atual da ação
+
+5. Classificação
+   Exemplo:
+
+Muito atrativa
+Atrativa
+Preço razoável
+Cara
+Muito cara
+
+Resultado da fase:
+O sistema deixa de apenas estudar o passado e passa a responder:
+
+“Considerando os fundamentos atuais, o preço parece justificar uma compra?”
+
+---
+
+## Fase 3 — Descoberta e validação de estratégias
+
+Objetivo: descobrir quais combinações históricas produziram melhores resultados de longo prazo.
+
+1. Criar hipóteses
+
+Exemplo:
+
+Empresas com:
+
+* ROIC elevado.
+* Dívida controlada.
+* Lucro crescente.
+* Valuation abaixo da média histórica.
+* Queda recente significativa.
+
+2. Backtesting
+   Testar cada estratégia ao longo de diferentes períodos históricos.
+
+3. Medir desempenho
+
+* Retorno anualizado.
+* Retorno acumulado.
+* Drawdown máximo.
+* Volatilidade.
+* Percentual de casos positivos.
+* Comparação com Ibovespa.
+
+4. Combinar notícias e fundamentos
+
+Exemplo:
+
+“Quando uma empresa de boa qualidade caiu mais de 20% após uma notícia negativa, mas seus fundamentos permaneceram estáveis, o que aconteceu nos anos seguintes?”
+
+5. Evitar erros estatísticos
+
+* Look-ahead bias.
+* Survivorship bias.
+* Overfitting.
+* Amostras muito pequenas.
+
+Resultado da fase:
+Uma biblioteca de estratégias e situações históricas que realmente podem ser verificadas, em vez de depender apenas de opinião.
+
+---
+
+## Fase 4 — Sistema de decisão atual
+
+Objetivo: utilizar tudo que foi aprendido nas fases anteriores para analisar o mercado atual.
+
+1. Radar de ações
+   O sistema acompanha periodicamente as empresas selecionadas.
+
+2. Score de oportunidade
+
+Exemplo:
+
+Qualidade: 88/100
+Valuation: 79/100
+Margem de segurança: 74/100
+Histórico: 82/100
+Risco: 61/100
+
+Atratividade geral: 81/100
+
+3. Diagnóstico
+
+O sistema explica:
+
+* Por que a ação parece barata ou cara.
+* Quais fundamentos sustentam a tese.
+* Quais notícias estão afetando a cotação.
+* Se situações parecidas já aconteceram.
+* Como o preço se comportou posteriormente.
+
+4. Cenários
+
+Exemplo:
+
+Cenário otimista
+Valor estimado: R$ 48
+
+Cenário base
+Valor estimado: R$ 41
+
+Cenário pessimista
+Valor estimado: R$ 32
+
+Preço atual
+R$ 35
+
+5. Riscos da tese
+
+O sistema deve sempre responder:
+
+“O que precisa acontecer para esta análise estar errada?”
+
+Resultado da fase:
+Um painel pessoal para ajudar na decisão de estudar, esperar ou realizar uma compra.
+
+---
+
+## Fase 5 — Inteligência avançada
+
+Esta fase só deve existir depois que todo o restante estiver funcionando de forma confiável.
+
+Objetivo: permitir que o sistema encontre relações que seriam difíceis de identificar manualmente.
+
+1. Machine Learning
+   Encontrar padrões entre:
+
+* preço;
+* valuation;
+* fundamentos;
+* macroeconomia;
+* notícias;
+* comportamento futuro.
+
+2. Processamento de linguagem
+   Utilizar IA para entender notícias, relatórios e comunicados.
+
+3. Detecção automática de eventos
+   Identificar acontecimentos potencialmente relevantes sem precisar cadastrá-los manualmente.
+
+4. Busca por situações semelhantes
+
+Exemplo:
+
+“A situação atual de VALE3 possui semelhança de 84% com 12 momentos históricos.”
+
+5. Explicação em linguagem natural
+
+Exemplo:
+
+“A ação está negociando abaixo de sua média histórica de valuation enquanto os principais indicadores operacionais permanecem estáveis. A principal pressão atual parece relacionada ao preço do minério e não à deterioração financeira da empresa.”
+
+Resultado da fase:
+Um assistente quantitativo de investimentos capaz de pesquisar, comparar e explicar oportunidades.
+
+---
+
+# Progressão geral
+
+FASE 1
+Dados históricos
+↓
+Entender o passado
+
+FASE 2
+Fundamentos + valuation
+↓
+Entender quanto a empresa pode valer
+
+FASE 3
+Backtesting
+↓
+Descobrir quais estratégias funcionaram historicamente
+
+FASE 4
+Radar atual
+↓
+Identificar situações interessantes hoje
+
+FASE 5
+IA + Machine Learning
+↓
+Encontrar padrões mais complexos e auxiliar na interpretação
+
+O princípio do projeto deve ser simples:
+
+Não tentar prever o mercado.
+
+O objetivo é aumentar a qualidade da decisão, buscando empresas de qualidade, preços razoáveis, margem de segurança e evidências históricas que ajudem a justificar uma compra de longo prazo.

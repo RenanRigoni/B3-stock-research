@@ -1,0 +1,174 @@
+# Taxonomia de eventos (fase1.md 34).
+# Versionada e expansivel -- nao precisa estar perfeita na primeira execucao.
+# Ao mudar keywords ou adicionar categoria, suba `version`: classificacoes de
+# versoes diferentes nunca se misturam sem metadata.
+
+version: news_taxonomy_v1
+
+# scope indica a que a categoria normalmente se refere. Serve para nao ler uma
+# queda setorial como noticia especifica da empresa (fase1.md 94).
+#   company | sector | macro | mixed
+
+categories:
+  earnings:
+    scope: company
+    keywords: [balanco, resultado trimestral, lucro liquido, prejuizo, receita liquida, ebitda, divulgacao de resultados]
+  guidance:
+    scope: company
+    keywords: [guidance, projecao, estimativa da companhia, perspectiva para o ano]
+  dividend:
+    scope: company
+    keywords: [dividendo, provento, pagamento aos acionistas, data com, data ex]
+  jcp:
+    scope: company
+    keywords: [juros sobre capital proprio, jcp]
+  capital_allocation:
+    scope: company
+    keywords: [plano de investimento, capex, alocacao de capital, plano estrategico]
+  share_buyback:
+    scope: company
+    keywords: [recompra de acoes, programa de recompra]
+  share_issue:
+    scope: company
+    keywords: [oferta de acoes, follow-on, aumento de capital, emissao de acoes, ipo]
+  merger_acquisition:
+    scope: company
+    keywords: [fusao, aquisicao, incorporacao, compra de participacao, oferta publica de aquisicao, opa]
+  asset_sale:
+    scope: company
+    keywords: [venda de ativo, desinvestimento, alienacao, desmobilizacao]
+  management_change:
+    scope: company
+    keywords: [troca de comando, mudanca na diretoria, renuncia, nomeacao, demissao de executivo]
+  ceo_change:
+    scope: company
+    keywords: [novo presidente da, troca de ceo, presidente-executivo, sai da presidencia]
+  board_change:
+    scope: company
+    keywords: [conselho de administracao, membro do conselho, assembleia de acionistas]
+  regulation:
+    scope: sector
+    keywords: [regulacao, agencia reguladora, aneel, anp, anatel, bacen, cvm determina, nova regra]
+  government_intervention:
+    scope: company
+    keywords: [interferencia do governo, ingerencia, pressao politica, uniao determina, governo indica]
+  tax:
+    scope: mixed
+    keywords: [tributacao, imposto, reforma tributaria, autuacao fiscal, receita federal]
+  lawsuit:
+    scope: company
+    keywords: [processo judicial, acao judicial, liminar, condenacao, indenizacao]
+  investigation:
+    scope: company
+    keywords: [investigacao, inquerito, operacao da policia federal, apuracao]
+  corruption:
+    scope: company
+    keywords: [corrupcao, propina, delacao, lava jato, desvio de recursos]
+  credit_rating:
+    scope: company
+    keywords: [rating, agencia de classificacao, moody, fitch, s&p, rebaixamento de nota, elevacao de nota]
+  debt:
+    scope: company
+    keywords: [divida, endividamento, alavancagem, debenture, captacao]
+  financing:
+    scope: company
+    keywords: [financiamento, emprestimo, linha de credito, bndes]
+  default_risk:
+    scope: company
+    keywords: [recuperacao judicial, calote, inadimplencia, risco de default, falencia]
+  production:
+    scope: company
+    keywords: [producao, extracao, volume produzido, barris por dia, toneladas produzidas]
+  capacity:
+    scope: company
+    keywords: [capacidade instalada, expansao de capacidade, nova planta, nova fabrica]
+  operational_incident:
+    scope: company
+    keywords: [parada de producao, interrupcao, falha operacional, paralisacao]
+  accident:
+    scope: company
+    keywords: [acidente, explosao, incendio, vazamento, rompimento de barragem, mortes]
+  environmental:
+    scope: company
+    keywords: [licenca ambiental, ibama, dano ambiental, multa ambiental, desastre ambiental]
+  commodity_price:
+    scope: sector
+    keywords: [preco do petroleo, brent, minerio de ferro, cotacao da commodity, preco do barril]
+  exchange_rate:
+    scope: macro
+    keywords: [dolar, cambio, real se desvaloriza, taxa de cambio]
+  interest_rate:
+    scope: macro
+    keywords: [selic, taxa de juros, copom, fed, juro basico]
+  inflation:
+    scope: macro
+    keywords: [inflacao, ipca, igp-m, indice de precos]
+  macro:
+    scope: macro
+    keywords: [pib, atividade economica, desemprego, contas publicas, arcabouco fiscal]
+  sector:
+    scope: sector
+    keywords: [setor de, industria de, mercado de, concorrentes do setor]
+  competition:
+    scope: sector
+    keywords: [concorrente, disputa de mercado, perda de participacao, market share]
+  contract:
+    scope: company
+    keywords: [contrato assinado, novo contrato, licitacao, concessao, leilao]
+  customer:
+    scope: company
+    keywords: [cliente, demanda, base de clientes, perda de cliente]
+  supplier:
+    scope: company
+    keywords: [fornecedor, cadeia de suprimentos, insumo]
+  product:
+    scope: company
+    keywords: [lancamento de produto, novo servico, novo produto]
+  technology:
+    scope: company
+    keywords: [tecnologia, digitalizacao, inteligencia artificial, sistema, plataforma]
+  labor:
+    scope: company
+    keywords: [funcionarios, contratacao, demissoes em massa, acordo coletivo]
+  strike:
+    scope: company
+    keywords: [greve, paralisacao dos trabalhadores, sindicato]
+  political:
+    scope: macro
+    keywords: [eleicao, congresso, governo federal, ministro, politica interna]
+  geopolitical:
+    scope: macro
+    keywords: [guerra, sancoes, tensao geopolitica, opep, conflito internacional]
+  rumor:
+    scope: company
+    keywords: [rumor, especulacao, fontes proximas, teria dito, nao confirmado, estuda a possibilidade]
+  analyst_rating:
+    scope: company
+    keywords: [recomendacao de compra, recomendacao de venda, preco-alvo, corretora eleva, banco rebaixa]
+  other:
+    scope: mixed
+    keywords: []
+
+# Sinais lexicais para o classificador heuristico. Sentimento linguistico NAO e
+# impacto economico -- ficam separados no schema (fase1.md 33).
+sentiment_lexicon:
+  positive: [alta, cresce, avanca, lucro recorde, supera expectativas, aprova, expande, eleva, recupera, acordo fechado]
+  negative: [queda, recua, despenca, prejuizo, abaixo do esperado, rejeita, corta, suspende, adia, rompe, multa, condena]
+
+# Marcadores de fonte oficial: comunicado da propria companhia ou do regulador.
+official_source_markers:
+  - fato relevante
+  - comunicado ao mercado
+  - aviso aos acionistas
+  - ri.
+  - relacoes com investidores
+  - cvm.gov.br
+  - b3.com.br
+
+rumor_markers:
+  - segundo fontes
+  - pessoas familiarizadas
+  - nao confirmado
+  - teria
+  - estuda a possibilidade
+  - apurou

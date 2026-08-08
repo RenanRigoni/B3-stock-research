@@ -1,0 +1,108 @@
+# Configuracao do projeto. Valores aqui sao versionados; segredos ficam no .env.
+
+project:
+  name: stock-research
+  timezone: America/Sao_Paulo
+  exchange: B3
+  base_currency: BRL
+
+storage:
+  # Camada curated fica no Supabase Postgres.
+  # Camada raw fica em disco local (auditoria barata, sem custo de storage).
+  backend: supabase
+  data_dir: ./data
+  raw_dir: ./data/raw
+  staging_dir: ./data/staging
+  exports_dir: ./data/exports
+
+prices:
+  primary_provider: yfinance
+  benchmark_symbol: "^BVSP"
+  benchmark_ticker: IBOV
+  interval: 1d
+  # Preservar OHLC bruto e ajustado separados. Nao negociavel (fase1.md 12).
+  auto_adjust: false
+  actions: true
+  repair: true
+  keepna: true
+  # Sobreposicao no update incremental: reprocessa os ultimos N pregoes para
+  # capturar correcoes retroativas do provedor (fase1.md 19).
+  incremental_overlap_days: 10
+  default_start: "2010-01-01"
+
+price_validation:
+  enabled: true
+  provider: brapi
+  warning_pct: 0.005
+  error_pct: 0.02
+  default_days: 60
+
+quality:
+  # Retorno diario acima disso vira WARNING para inspecao manual.
+  extreme_return_threshold: 0.20
+  # Gap de pregoes sem dado acima disso vira WARNING.
+  max_gap_trading_days: 5
+  volume_spike_ratio: 3.0
+  # Se um teste de look-ahead falhar, o pipeline aborta. Nao negociavel.
+  fail_on_lookahead: true
+
+news:
+  primary_provider: gdelt
+  language: portuguese
+  dedup_window_hours: 72
+  title_similarity_threshold: 0.88
+  relevance:
+    high: 0.80
+    medium: 0.50
+  # Extracao de texto completo e opcional e nunca quebra o pipeline (fase1.md 32).
+  extract_full_text: false
+  extraction_timeout_seconds: 15
+
+classification:
+  # Default do MVP: heuristica + regras. Nenhuma chave paga e obrigatoria.
+  provider: heuristic
+  version: news_classifier_v1
+
+events:
+  clustering_version: event_clustering_v1
+  cluster_window_hours: 48
+  # Politica conservadora para artigo sem hora: assume o proximo pregao, para
+  # nunca atribuir a uma noticia um movimento anterior a ela (fase1.md 39).
+  date_only_policy: next_trading_day
+  # Horario regular do pregao B3 (referencia atual, nao historica).
+  market_open_local: "10:00"
+  market_close_local: "17:00"
+  after_close_policy: next_trading_day
+
+event_study:
+  method: market_model
+  price_series: adjusted
+  horizons: [1, 2, 5, 10, 20, 60, 120, 252, 504, 756]
+  pre_event_horizons: [-1, -5, -20, -60]
+  estimation_start: -252
+  estimation_end: -30
+  min_observations: 60
+  method_version: event_study_v1
+
+providers:
+  gdelt:
+    requests_per_second: 0.5
+    max_retries: 5
+    timeout_seconds: 30
+  brapi:
+    requests_per_second: 1.0
+    max_retries: 3
+    timeout_seconds: 20
+  yfinance:
+    requests_per_second: 1.0
+    max_retries: 3
+    timeout_seconds: 30
+  cvm:
+    requests_per_second: 1.0
+    max_retries: 3
+    timeout_seconds: 120
+
+cvm:
+  base_url: https://dados.cvm.gov.br/dados/CIA_ABERTA
+  default_from_year: 2010
+  documents: [DFP, ITR]
