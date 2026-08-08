@@ -207,6 +207,26 @@ def insert_many(table: str, rows: Sequence[dict[str, Any]], *, batch_size: int =
     return len(rows)
 
 
+def insert_returning(table: str, row: dict[str, Any]) -> dict[str, Any]:
+    """``INSERT`` de uma linha devolvendo o registro criado (para pegar o id
+    gerado por ``identity``). Espelha ``rest.insert_returning`` -- mesma
+    assinatura nos dois backends."""
+    columns = list(row.keys())
+    ident = sql.Identifier
+    statement = sql.SQL(
+        "insert into public.{table} ({cols}) values ({placeholders}) returning *"
+    ).format(
+        table=ident(table),
+        cols=sql.SQL(", ").join(ident(c) for c in columns),
+        placeholders=sql.SQL(", ").join(sql.Placeholder() * len(columns)),
+    )
+    with cursor(autocommit=True) as cur:
+        cur.execute(statement, [_adapt(row.get(c)) for c in columns])
+        created = cur.fetchone()
+    assert created is not None
+    return created
+
+
 # ---------------------------------------------------------------------------
 # Linhagem (fase1.md 64)
 # ---------------------------------------------------------------------------

@@ -136,6 +136,19 @@ def insert_many(table: str, rows: list[dict[str, Any]]) -> int:
     return rest.insert_many(table, rows)
 
 
+def insert_returning(table: str, row: dict[str, Any]) -> dict[str, Any]:
+    """``INSERT`` de uma linha devolvendo o registro criado (para pegar um id
+    gerado por ``identity``, ex. ``cluster_id``). Mesma assinatura nos dois backends."""
+    if _is_pg():
+        from stock_research.db import connection as pg
+
+        return pg.insert_returning(table, row)
+
+    from stock_research.db import rest
+
+    return rest.insert_returning(table, row)
+
+
 # ---------------------------------------------------------------------------
 # Linhagem (fase1.md 64)
 # ---------------------------------------------------------------------------
@@ -299,6 +312,7 @@ __all__ = [
     "finish_run",
     "healthcheck",
     "insert_many",
+    "insert_returning",
     "record_finding",
     "start_run",
     "upsert_many",

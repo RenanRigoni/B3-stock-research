@@ -323,8 +323,18 @@ def _print_news_outcome(ticker: str, outcome: dict[str, object]) -> None:
 def analyze_news(
     ticker: Annotated[str, typer.Option("--ticker")],
 ) -> None:
-    """Deduplicacao, ligacao com empresas e classificacao de noticias."""
-    _not_implemented(7, "deduplicacao e classificacao de noticias")
+    """Deduplicacao por similaridade e relevancia de noticias (fase1.md 29-31, 36)."""
+    from stock_research.pipelines.news_analysis import analyze_news as run_analyze_news
+
+    outcome = run_analyze_news(ticker)
+    if outcome.get("status") == "failed":
+        console.print(f"[red]{ticker} FALHOU[/]: {outcome.get('error')}")
+        raise typer.Exit(code=1)
+    console.print(
+        f"[green]{ticker}[/]: {outcome.get('articles_considered', 0)} artigo(s) analisado(s), "
+        f"{outcome.get('clusters', 0)} cluster(s) de duplicata ({outcome.get('clustered', 0)} artigo(s)), "
+        f"{outcome.get('rescored', 0)} score(s) de relevancia recalculado(s)"
+    )
 
 
 @app.command(name="build-events")
