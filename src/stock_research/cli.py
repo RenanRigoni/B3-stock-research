@@ -408,8 +408,29 @@ def pipeline(
     ticker: Annotated[str, typer.Option("--ticker")],
     start: Annotated[str | None, typer.Option("--start")] = None,
 ) -> None:
-    """Pipeline completo ponta a ponta."""
-    _not_implemented(12, "pipeline completo")
+    """Pipeline completo ponta a ponta (fase1.md 112-113)."""
+    from datetime import date as _date
+
+    from stock_research.pipelines.pipeline import run_pipeline
+
+    start_date = _date.fromisoformat(start) if start else None
+    outcome = run_pipeline(ticker, start=start_date)
+
+    table = Table(title=f"PHASE 1 -- {ticker}", show_header=True, header_style="bold")
+    table.add_column("Etapa")
+    table.add_column("Status")
+    for name, step in outcome["steps"].items():
+        if step.get("skipped"):
+            table.add_row(name, "[yellow]PULADA (dependencia falhou)[/]")
+        elif step.get("ok"):
+            table.add_row(name, "[green]OK[/]")
+        else:
+            table.add_row(name, f"[red]FALHOU[/]: {step.get('error', '')}")
+    console.print(table)
+
+    if outcome["failed"]:
+        console.print(f"[yellow]Etapas com falha: {', '.join(outcome['failed'])}[/]")
+        raise typer.Exit(code=1)
 
 
 @app.command()

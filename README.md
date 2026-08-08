@@ -91,27 +91,29 @@ stock-research status    # cobertura de dados por instrumento
 
 ## Comandos
 
-| Comando | O que faz | Milestone |
-|---|---|---|
-| `doctor` | Diagnostica configuração e conexão | ✅ pronto |
-| `init` | Cria `data/` e carrega `companies.yaml` no banco | ✅ pronto |
-| `status [TICKER]` | Cobertura de dados por instrumento | ✅ pronto |
-| `sync-prices --ticker PETR4 --start 2010-01-01` | Backfill de preços | 1 |
-| `update-prices` | Atualização incremental | 1 |
-| `validate-prices --ticker PETR4` | Comparação yfinance × brapi | 3 |
-| `sync-cvm --from-year 2010` | DFP/ITR da CVM | 4 |
-| `sync-news --ticker PETR4 --start 2020-01-01` | Notícias via GDELT | 6 |
-| `analyze-news --ticker PETR4` | Dedup, ligação e classificação | 7–8 |
-| `build-events --ticker PETR4` | Agrupa notícias em eventos | 9 |
-| `run-event-study --ticker PETR4` | Retornos, CAR, retorno anormal | 10 |
-| `audit` | Relatório de qualidade de dados | 11 |
-| `report PETR4` | Relatório HTML da empresa | 11 |
-| `pipeline --ticker PETR4 --start 2018-01-01` | Tudo, ponta a ponta | 12 |
+Todos os comandos abaixo estão implementados e validados contra dados reais.
 
-Comandos ainda não implementados **falham explicitamente** indicando o milestone.
-Nenhum stub finge sucesso.
+| Comando | O que faz |
+|---|---|
+| `doctor` | Diagnostica configuração e conexão |
+| `init` | Cria `data/` e carrega `companies.yaml` no banco |
+| `status [TICKER]` | Cobertura de dados por instrumento |
+| `sync-prices --ticker PETR4 --start 2010-01-01` / `--all` | Backfill de preços |
+| `update-prices` | Atualização incremental de preços |
+| `validate-prices --ticker PETR4 --days 60` | Comparação yfinance × brapi |
+| `sync-cvm --registry` | Resolve CNPJ/código CVM das empresas do universo |
+| `sync-cvm --year 2024` / `--from-year 2010` | DFP/ITR da CVM |
+| `sync-news --ticker PETR4 --start 2020-01-01 --end 2020-12-31` / `--all` | Notícias via GDELT |
+| `analyze-news --ticker PETR4` | Dedup por similaridade, relevância e classificação heurística |
+| `build-events --ticker PETR4` | Agrupa notícias relevantes em eventos, calcula `effective_trade_date` |
+| `run-event-study --ticker PETR4` | Retornos, excesso, market model, CAR por evento |
+| `audit` | Relatório de qualidade de dados (`data/exports/data_quality_*.md`) |
+| `report PETR4` | Relatório da empresa (`data/exports/PETR4_phase1_report.md`) |
+| `backup` | Copia `data/raw/` e `config/` para `backups/<timestamp>/` |
+| `pipeline --ticker PETR4 --start 2018-01-01` | Tudo, ponta a ponta |
 
-Roadmap completo: [docs/roadmap.md](docs/roadmap.md).
+Roadmap completo (com os bugs reais encontrados e corrigidos em cada milestone):
+[docs/roadmap.md](docs/roadmap.md).
 
 ---
 

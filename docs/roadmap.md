@@ -18,7 +18,7 @@ antes do anterior fechar.
 | 9 | Eventos | Clustering, `effective_trade_date`, confounding | §38–41, §93 | ✅ |
 | 10 | Event study | Retornos, excesso, market model, CAR | §53–60, §111 | ✅ |
 | 11 | Relatórios | `audit`, `report`, `backup` | §71–74, §100 | ✅ |
-| 12 | Ponta a ponta | `pipeline`, validação em PETR4/VALE3/ITUB4, docs finais | §112–125 | ⬜ |
+| 12 | Ponta a ponta | `pipeline`, validação em PETR4/VALE3/ITUB4, docs finais | §112–125 | ✅ |
 
 ## O que já está pronto (Milestones 0-5)
 
@@ -95,3 +95,108 @@ Não é "tem muitos dados". É:
 
 Se a suíte anti-look-ahead falhar, a Fase 1 **não** está pronta — independentemente do que
 os outros números digam.
+
+---
+
+## Conclusão final (fase1.md §125-126)
+
+Os 12 milestones estão implementados, testados e validados contra dados reais — não só
+contra fixtures. 321 testes unitários passando, `ruff` e `mypy` limpos em todo o código
+(`src/`: 58 arquivos), zero segredos versionados. Repositório:
+[github.com/RenanRigoni/B3-stock-research](https://github.com/RenanRigoni/B3-stock-research).
+
+### O que está funcionando
+
+Todo o pipeline `stock-research pipeline --ticker X` roda ponta a ponta: preços → cadastro
+CVM → fundamentos → notícias → dedup → relevância → classificação → eventos → event study →
+audit → relatório. Estado final do banco (Supabase `B3 FOCUS`, `sa-east-1`):
+
+| | PETR4 | VALE3 | ITUB4 | IBOV |
+|---|---|---|---|---|
+| Pregões | 651 | 651 | 651 | 651 |
+| Documentos CVM | 74 | 86 | 82 | — |
+| Notícias | 129 | 0 | 0 | — |
+| Eventos / studies | 38 / 31 | 0 / 0 | 0 / 0 | — |
+
+Total de fatos contábeis (`financial_statement_facts`) nas três empresas: **230.990**.
+
+### O que foi validado (não só implementado)
+
+- **Point-in-time de fundamentos**: zero violações em dados reais, em 3 janelas `as_of`
+  distintas contra os fatos ingeridos da CVM (Milestone 5).
+- **Point-in-time de eventos** (`effective_trade_date`): bug real de direção nos horizontes
+  pré-evento pego pelo teste antes de tocar o banco (Milestone 10) — corrigido antes de
+  qualquer dado real ser gravado com o sinal errado.
+- **Dedup por similaridade**: validado com um par real de republicação do GDELT que a métrica
+  inicial (`token_sort_ratio`) deixava passar; recalibrado para `token_set_ratio` com o motivo
+  documentado no código (Milestone 7).
+- **Relevância e classificação**: os 7 artigos sobre "Lava Jato" que o GDELT trouxe numa busca
+  por Petrobras (por full-text, não título) foram corretamente marcados como baixa relevância
+  — confirma que as camadas de coleta, relevância e classificação se encaixam como projetado
+  antes de qualquer decisão automática usar esses dados (Milestones 6-8).
+- **Confounding**: 26 dos 38 eventos de PETR4 caem no mesmo pregão real (dia do resultado do
+  2º trimestre), corretamente marcados como confundidos entre si — não é ruído, é o cenário
+  literal do fase1.md §93 acontecendo com dado real.
+- **Idempotência**: verificada por contagem direta no banco (não só pela saída do CLI) em
+  preços, fundamentos, notícias, clusters, eventos e event studies — todos estáveis em
+  execuções repetidas.
+- **Bugs de infraestrutura**: 9 bugs reais documentados no changelog acima, todos encontrados
+  rodando contra o Supabase/CVM/GDELT reais (nenhum apareceu nos testes com fixture pequena),
+  todos corrigidos com teste de regressão.
+
+### Fontes utilizadas
+
+yfinance (preços), CVM Dados Abertos (fundamentos, DFP/ITR 2010-2026), GDELT DOC 2.0 API
+(notícias). brapi não foi exercitada nesta validação (sem `BRAPI_TOKEN`) — o pipeline
+principal funciona sem ela por design (Milestone 3).
+
+### Limitações que permanecem
+
+Ver [docs/limitations.md](limitations.md) para a lista completa. As que mais pesam para uso
+imediato:
+
+- **Rate limit do GDELT neste ambiente é mais rígido que o documentado** — provavelmente por
+  IP compartilhado. VALE3 e ITUB4 ficaram sem notícias nesta rodada por isso, não por bug: o
+  mecanismo (retry, backoff, `quality_findings` registrando o esgotamento) funcionou
+  exatamente como projetado nos dois casos observados (sucesso vazio silencioso no VALE3,
+  esgotamento com warning registrado no ITUB4). Rodar de uma rede pessoal deve resolver.
+- **CVM não publica ITR de 2010** no endpoint de dados abertos (404 real, confirmado) — gap da
+  fonte, não do pipeline. Histórico de fundamentos é sólido a partir de 2011.
+- **Survivorship bias** não resolvido — universo só tem empresas vivas (ver limitations.md).
+- **`DATABASE_URL` não configurada** — tudo roda no backend PostgREST (mais lento, sem
+  transação multi-tabela), que é por isso mesmo mais testado nesta validação que o `psycopg`.
+
+### Dados com maior risco de inconsistência
+
+- Métricas fundamentalistas com `quality_flag != 'ok'` (`missing_input`, `estimated`) — sempre
+  checar o `quality_reason` antes de usar.
+- `event_studies.low_sample = true` — alpha/beta estimados com poucas observações.
+- Eventos com `is_confounded = true` — reação de preço não pode ser atribuída a um só evento.
+- Categorização de notícia sem `category` (heurística não reconheceu nenhum termo da
+  taxonomia) — não é erro, é honestidade sobre o limite da heurística.
+
+### O que exige revisão manual
+
+`stock-research audit` expõe isso diretamente: `v_manual_review_queue` (movimento de preço
+sem evento associado, relevância ambígua, timestamp incerto) e
+`config/company_mapping.yaml` (CNPJ/código CVM resolvidos automaticamente, mas
+`confirmed: false` até um humano conferir contra a fonte oficial).
+
+### Risco de look-ahead
+
+**Nenhum encontrado.** `tests/unit/test_lookahead.py` (12 testes, incluindo o cenário literal
+do fase1.md §63) e a validação contra os 230.990 fatos reais confirmam: nenhum fato usado numa
+consulta `as_of` tem `available_from` posterior ao boundary consultado. Esta é a garantia mais
+importante do projeto e ela se sustenta.
+
+### A Fase 1 está pronta para servir de base à Fase 2?
+
+**Sim, com uma ressalva operacional clara.** A infraestrutura (schema, point-in-time,
+idempotência, rastreabilidade, qualidade) está comprovadamente correta e testada — inclusive
+sob dados reais e mensagens de erro reais de três fontes externas independentes. O que a Fase
+2 (valuation + qualidade) vai precisar já está disponível: preços point-in-time, fundamentos
+com `available_from`, ações corporativas, contexto histórico de eventos, benchmark. A ressalva
+é de **volume**, não de **arquitetura**: notícias e eventos hoje só têm profundidade real em
+PETR4; VALE3 e ITUB4 precisam de uma nova rodada de `sync-news` fora do horário de pico do
+rate limit do GDELT antes de qualquer análise cross-company de notícias fazer sentido. Preços
+e fundamentos, que são o essencial para a Fase 2, já estão completos nas três.

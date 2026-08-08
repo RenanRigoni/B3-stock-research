@@ -33,7 +33,7 @@ DEFAULT_BATCH_SIZE = 500
 
 
 @contextmanager
-def connection(autocommit: bool = False) -> Iterator[psycopg.Connection]:
+def connection(autocommit: bool = False) -> Iterator[psycopg.Connection[dict[str, Any]]]:
     """Conexao com o Postgres. Fecha sempre, faz rollback em erro."""
     conn = psycopg.connect(require_database_url(), autocommit=autocommit, row_factory=dict_row)
     try:
@@ -49,7 +49,7 @@ def connection(autocommit: bool = False) -> Iterator[psycopg.Connection]:
 
 
 @contextmanager
-def cursor(autocommit: bool = False) -> Iterator[psycopg.Cursor]:
+def cursor(autocommit: bool = False) -> Iterator[psycopg.Cursor[dict[str, Any]]]:
     with connection(autocommit=autocommit) as conn, conn.cursor() as cur:
         yield cur
 
@@ -70,12 +70,12 @@ def healthcheck() -> dict[str, Any]:
     """Confirma conexao e retorna versao do servidor e contagem de tabelas."""
     with cursor() as cur:
         cur.execute("select version() as version, current_database() as database")
-        info = cur.fetchone() or {}
+        info: dict[str, Any] = cur.fetchone() or {}
         cur.execute(
             "select count(*) as tables from information_schema.tables "
             "where table_schema = 'public' and table_type = 'BASE TABLE'"
         )
-        tables = cur.fetchone() or {}
+        tables: dict[str, Any] = cur.fetchone() or {}
     return {**info, **tables}
 
 
@@ -100,7 +100,7 @@ def upsert_many(
     conflict_columns: Sequence[str],
     update_columns: Sequence[str] | None = None,
     *,
-    conn: psycopg.Connection | None = None,
+    conn: psycopg.Connection[dict[str, Any]] | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> dict[str, int]:
     """``INSERT ... ON CONFLICT DO UPDATE`` em lotes.
@@ -131,6 +131,7 @@ def upsert_many(
     col_sql = sql.SQL(", ").join(ident(c) for c in columns)
     conflict_sql = sql.SQL(", ").join(ident(c) for c in conflict_columns)
 
+    conflict_action: sql.Composable
     if update_columns:
         assignments = sql.SQL(", ").join(
             sql.SQL("{} = excluded.{}").format(ident(c), ident(c)) for c in update_columns
@@ -154,7 +155,7 @@ def upsert_many(
 
     inserted = updated = 0
 
-    def _run(active: psycopg.Connection) -> None:
+    def _run(active: psycopg.Connection[dict[str, Any]]) -> None:
         nonlocal inserted, updated
         with active.cursor() as cur:
             for start in range(0, len(rows), batch_size):

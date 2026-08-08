@@ -199,7 +199,9 @@ def _ingest_statement_file(
         if cnpj not in target_cnpjs:
             continue
 
-        meta_row = metadata_index.get((cnpj, csv_row.get("DT_REFER"), csv_row.get("VERSAO")))
+        dt_refer = (csv_row.get("DT_REFER") or "").strip()
+        versao = (csv_row.get("VERSAO") or "").strip()
+        meta_row = metadata_index.get((cnpj, dt_refer, versao))
         result = build_fact_row(
             csv_row, document_type=document_type, statement_info=info,
             source_file=source_file, run_id=run_id, metadata_row=meta_row,

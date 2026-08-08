@@ -150,7 +150,7 @@ def _sum_distinct_matches(
         key = _norm(f["account_description"])
         if key not in by_desc or _depth(f["account_code"]) < _depth(by_desc[key]["account_code"]):
             by_desc[key] = f
-    total = sum((_scaled(f) or Decimal(0)) for f in by_desc.values())
+    total = sum((_scaled(f) or Decimal(0) for f in by_desc.values()), start=Decimal(0))
     doc_ids = [f["document_id"] for f in by_desc.values() if f.get("document_id")]
     return total, doc_ids
 
