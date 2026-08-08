@@ -350,8 +350,18 @@ def analyze_news(
 def build_events(
     ticker: Annotated[str, typer.Option("--ticker")],
 ) -> None:
-    """Agrupa noticias em eventos e calcula effective_trade_date."""
-    _not_implemented(9, "clustering de eventos")
+    """Agrupa noticias relevantes em eventos e calcula effective_trade_date (fase1.md 38-41)."""
+    from stock_research.pipelines.events import build_events as run_build_events
+
+    outcome = run_build_events(ticker)
+    if outcome.get("status") == "failed":
+        console.print(f"[red]{ticker} FALHOU[/]: {outcome.get('error')}")
+        raise typer.Exit(code=1)
+    console.print(
+        f"[green]{ticker}[/]: {outcome.get('candidates', 0)} candidato(s), "
+        f"{outcome.get('events', 0)} evento(s), {outcome.get('confounded', 0)} confundido(s) "
+        f"(mais de um evento no mesmo pregao)"
+    )
 
 
 @app.command(name="run-event-study")
