@@ -86,7 +86,9 @@ event_study:
 
 providers:
   gdelt:
-    requests_per_second: 0.5
+    # GDELT pede explicitamente (HTTP 429 confirmado contra a API real): "please
+    # limit requests to one every 5 seconds". 0.18/s da uma folga de ~0.5s.
+    requests_per_second: 0.18
     max_retries: 5
     timeout_seconds: 30
   brapi:

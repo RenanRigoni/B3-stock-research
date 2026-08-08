@@ -48,6 +48,13 @@ def _alias_rows(entry: dict[str, Any], instrument_id: int) -> list[dict[str, Any
     aliases = entry.get("aliases") or {}
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
+    # "Vale" e o proprio company_name da VALE3, mas o YAML classifica esse
+    # termo isolado como fraco de proposito (casa com "vale a pena",
+    # "vale-refeicao", nomes de cidade). Sem essa checagem, a promocao
+    # automatica de company_name/legal_name para "forte" ignoraria a
+    # classificacao explicita e reintroduziria o ruido que ela existe para
+    # evitar -- o YAML e a fonte da verdade, nao a heuristica de default.
+    weak_names = {str(a).strip().lower() for a in (aliases.get("weak") or [])}
 
     def add(alias: str, kind: str, strong: bool) -> None:
         key = alias.strip()
@@ -59,7 +66,7 @@ def _alias_rows(entry: dict[str, Any], instrument_id: int) -> list[dict[str, Any
                 "instrument_id": instrument_id,
                 "alias": key,
                 "alias_kind": kind,
-                "is_strong": strong,
+                "is_strong": strong and key.lower() not in weak_names,
             }
         )
 

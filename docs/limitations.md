@@ -21,6 +21,15 @@ que os dados **não** conseguem sustentar é parte do produto, não uma ressalva
   ausência de notícia.
 - **Cobertura varia com o tempo.** Períodos mais antigos são mais esparsos; comparar volume
   de notícias entre décadas é enganoso.
+- **Rate limit do GDELT é mais rígido na prática do que o documentado.** O erro 429 real diz
+  "uma requisição a cada 5 segundos", mas em teste isolado (sem rajada) esse intervalo não foi
+  suficiente — sugere limite por IP compartilhado. Backfills grandes podem precisar rodar bem
+  mais devagar que `providers.gdelt.requests_per_second` sozinho garante. Ver docs/sources.md.
+- **GDELT busca full-text, não só título** (validado contra tráfego real — ver docs/sources.md).
+  Um artigo pode aparecer numa busca por "Petrobras" sem o nome no título porque a empresa é
+  citada no corpo. `match_method='query'` sempre grava com `review_status='pending_review'` e
+  a relevância (Milestone 7) é calculada a partir do título; sem extração de texto completo
+  (opcional, fase1.md 32), não há como confirmar menções que só existem no corpo.
 - **Timestamps podem ser imprecisos.** Daí `time_precision` (`exact` / `hour` / `date_only` /
   `unknown`) e a política conservadora de `effective_trade_date`.
 - **Conteúdo desaparece.** Portais removem matérias; a extração de texto pode falhar sem que

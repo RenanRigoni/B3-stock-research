@@ -12,7 +12,7 @@ antes do anterior fechar.
 | 3 | Qualidade + brapi | Checks de preço, `validate-prices`, brapi opcional | §21, §22 | ✅ |
 | 4 | CVM bruto | Cadastro, DFP/ITR, checksum, staging | §42–46 | ✅ |
 | 5 | Fundamentos point-in-time | `available_from`, `get_fundamentals_as_of`, testes anti-look-ahead | §47–52, §110 | ✅ |
-| 6 | Notícias | Adapter GDELT, bruto preservado, normalização | §24–28 | ⬜ |
+| 6 | Notícias | Adapter GDELT, bruto preservado, normalização | §24–28 | ✅ |
 | 7 | Dedup + linking | Clusters, `news_company_links`, relevância | §29–31, §36 | ⬜ |
 | 8 | Classificação | Heurística + taxonomia, sem API paga obrigatória | §33–37 | ⬜ |
 | 9 | Eventos | Clustering, `effective_trade_date`, confounding | §38–41, §93 | ⬜ |
@@ -61,6 +61,19 @@ os próximos milestones:
    point-in-time) quando rodando sem `DATABASE_URL`. `rest.py` agora coage os dois formatos
    na leitura, para os dois backends se comportarem igual (contrato que `db/__init__.py`
    já prometia, mas não cumpria).
+6. **`company_name` promovido a alias forte mesmo quando o próprio YAML classifica esse termo
+   como fraco.** VALE3 tem `company_name: Vale` e `aliases.weak: [Vale]`; a promoção
+   automática ignorava a classificação explícita, reintroduzindo o ruído que ela existe para
+   evitar (contamina exatamente a query de notícias do Milestone 6). Corrigido em
+   `pipelines/universe.py`, com teste de regressão e reload confirmado no banco.
+7. **`ON CONFLICT DO UPDATE` rejeita colisão dentro do mesmo lote** (achado 2×: primeiro em
+   DMPL, depois em `news_articles`). O backend REST manda um `INSERT` com várias `VALUES` numa
+   chamada só; se duas linhas do lote tiverem a mesma chave de conflito — caso real:
+   `http://` e `https://` do mesmo artigo colapsando pro mesmo `url_hash` após a
+   canonicalização — o Postgres rejeita com *"cannot affect row a second time"*. `psycopg`
+   nunca sofria disso (processa linha a linha). Corrigido na camada certa: `db/rest.py`
+   deduplica por `conflict_columns` antes de montar o request, em vez de cada pipeline ter
+   que lembrar disso sozinho.
 
 ## Bloqueios conhecidos
 

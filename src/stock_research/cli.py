@@ -275,12 +275,48 @@ def sync_cvm(
 
 @app.command(name="sync-news")
 def sync_news(
-    ticker: Annotated[str, typer.Option("--ticker")],
+    ticker: Annotated[str | None, typer.Option("--ticker")] = None,
+    all_tickers: Annotated[bool, typer.Option("--all")] = False,
     start: Annotated[str | None, typer.Option("--start")] = None,
     end: Annotated[str | None, typer.Option("--end")] = None,
 ) -> None:
-    """Coleta de noticias historicas via GDELT."""
-    _not_implemented(6, "coleta de noticias via GDELT")
+    """Coleta de noticias historicas via GDELT (fase1.md 23-31)."""
+    from datetime import date as _date
+
+    from stock_research.pipelines.news import sync_news as run_sync_news
+    from stock_research.pipelines.news import sync_news_all as run_sync_news_all
+
+    start_date = _date.fromisoformat(start) if start else None
+    end_date = _date.fromisoformat(end) if end else None
+
+    if all_tickers:
+        result = run_sync_news_all(start=start_date, end=end_date)
+        for t, outcome in result["results"].items():
+            _print_news_outcome(t, outcome)
+        if result["failed"]:
+            raise typer.Exit(code=1)
+        return
+
+    if not ticker:
+        console.print("[red]Informe --ticker ou --all.[/]")
+        raise typer.Exit(code=2)
+
+    outcome = run_sync_news(ticker=ticker, start=start_date, end=end_date)
+    _print_news_outcome(ticker, outcome)
+    if outcome.get("status") == "failed":
+        raise typer.Exit(code=1)
+
+
+def _print_news_outcome(ticker: str, outcome: dict[str, object]) -> None:
+    if outcome.get("status") == "failed":
+        console.print(f"[red]{ticker} FALHOU[/]: {outcome.get('error')}")
+        return
+    console.print(
+        f"[green]{ticker}[/]: query={outcome.get('query')!r} -- "
+        f"{outcome.get('fetched', 0)} artigo(s) buscado(s), "
+        f"{outcome.get('inserted', 0)} novo(s), {outcome.get('updated', 0)} atualizado(s), "
+        f"{outcome.get('links', 0)} link(s) empresa-artigo"
+    )
 
 
 @app.command(name="analyze-news")

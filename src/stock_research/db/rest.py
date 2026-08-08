@@ -195,6 +195,18 @@ def _inline_params(query: str, params: list[Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _dedupe_by_conflict_key(rows: list[dict[str, Any]], conflict_columns: list[str]) -> list[dict[str, Any]]:
+    """Mantem so a ultima ocorrencia de cada valor de ``conflict_columns``,
+    preservando a ordem original das chaves restantes. "Ultima ganha" espelha
+    o efeito de rodar upserts sequenciais linha a linha (o que o backend
+    psycopg faz de verdade)."""
+    last_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = tuple(row.get(c) for c in conflict_columns)
+        last_by_key[key] = row
+    return list(last_by_key.values())
+
+
 def upsert_many(
     table: str,
     rows: list[dict[str, Any]],
@@ -209,10 +221,22 @@ def upsert_many(
     tambem nao permite escolher quais colunas sobrescrever. Quando
     ``update_columns`` e uma lista vazia, usamos ``ignore-duplicates`` para
     preservar o registro existente.
+
+    Deduplica por ``conflict_columns`` antes de enviar (mantendo a ULTIMA
+    ocorrencia de cada chave). Postgres processa um ``INSERT ... VALUES (...),
+    (...)`` como uma unica operacao: se duas linhas da MESMA chamada tiverem a
+    mesma chave de conflito, ele rejeita com "ON CONFLICT DO UPDATE command
+    cannot affect row a second time" -- confirmado batendo nisso duas vezes
+    (financial_statement_facts via DMPL, depois news_articles quando o GDELT
+    devolveu o mesmo artigo mais de uma vez na mesma janela). O backend
+    ``psycopg`` (connection.py) nao sofre disso porque executa linha a linha;
+    dedup aqui faz os dois backends se comportarem igual, em vez de cada
+    chamador ter que se lembrar de deduplicar por conta propria.
     """
     if not rows:
         return {"inserted": 0, "updated": 0, "total": 0}
 
+    rows = _dedupe_by_conflict_key(rows, conflict_columns)
     resolution = "ignore-duplicates" if update_columns == [] else "merge-duplicates"
     on_conflict = ",".join(conflict_columns)
     total = 0
