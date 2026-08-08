@@ -22,31 +22,28 @@
 # alterado automaticamente por nenhum pipeline.
 
 version: company_mapping_v1
-
 mappings:
   PETR4:
-    cnpj: null
-    cvm_code: null
-    legal_name: null
+    cnpj: 33.000.167/0001-01
+    cvm_code: '9512'
+    legal_name: PETRÓLEO BRASILEIRO S.A. - PETROBRAS
     isin: null
-    resolved_by: null      # cnpj | cvm_code | isin | legal_name | manual
+    resolved_by: cnpj
     confirmed: false
     confirmed_at: null
-
   VALE3:
-    cnpj: null
-    cvm_code: null
-    legal_name: null
+    cnpj: 33.592.510/0001-54
+    cvm_code: '4170'
+    legal_name: VALE S.A.
     isin: null
-    resolved_by: null
+    resolved_by: cnpj
     confirmed: false
     confirmed_at: null
-
   ITUB4:
-    cnpj: null
-    cvm_code: null
-    legal_name: null
+    cnpj: 60.872.504/0001-23
+    cvm_code: '1279'
+    legal_name: ITAÚ UNIBANCO HOLDING S.A.
     isin: null
-    resolved_by: null
+    resolved_by: cnpj
     confirmed: false
     confirmed_at: null

@@ -236,8 +236,41 @@ def sync_cvm(
     from_year: Annotated[int | None, typer.Option("--from-year")] = None,
     registry: Annotated[bool, typer.Option("--registry", help="So o cadastro de companhias.")] = False,
 ) -> None:
-    """Download e ingestao de DFP/ITR da CVM."""
-    _not_implemented(4, "ingestao de dados da CVM")
+    """Download e ingestao de DFP/ITR da CVM (fase1.md 42-46)."""
+    if registry:
+        from stock_research.pipelines.fundamentals import sync_company_registry
+
+        result = sync_company_registry()
+        console.print(
+            f"[green]Cadastro sincronizado[/]: {result['registry_rows']} companhia(s) no cadastro, "
+            f"{result['resolved']} ticker(s) resolvido(s), {result['unresolved']} pendente(s)."
+        )
+        for note in result["notes"]:
+            console.print(f"  {note}")
+        console.print(
+            "[yellow]Revise config/company_mapping.yaml e marque `confirmed: true` "
+            "apos conferir CNPJ/codigo CVM.[/]"
+        )
+        return
+
+    from stock_research.pipelines.fundamentals import sync_cvm as run_sync_cvm
+
+    result = run_sync_cvm(year=year, from_year=from_year)
+    table = Table(title="sync-cvm", show_header=True, header_style="bold")
+    for col in ("Documento/Ano", "Status", "Detalhe"):
+        table.add_column(col)
+    for key, outcome in result["results"].items():
+        if outcome.get("status") == "failed":
+            table.add_row(key, "[red]FALHOU[/]", str(outcome.get("error", "")))
+        else:
+            detail = (
+                f"{outcome.get('documents', 0)} documento(s), {outcome.get('facts', 0)} fato(s), "
+                f"{outcome.get('skipped_rows', 0)} linha(s) descartada(s)"
+            )
+            table.add_row(key, "[green]OK[/]", detail)
+    console.print(table)
+    if result["failed"]:
+        raise typer.Exit(code=1)
 
 
 @app.command(name="sync-news")

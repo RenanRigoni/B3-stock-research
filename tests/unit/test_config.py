@@ -107,10 +107,13 @@ class TestTaxonomy:
 
 
 class TestCompanyMapping:
-    def test_cnpj_e_codigo_cvm_comecam_vazios(self):
-        # Preencher de memoria seria inventar dado oficial. O mapeamento so e
-        # populado pelo cadastro real da CVM, com conferencia humana
-        # (fase1.md 52 e 123: dado ausente > dado incorreto).
+    def test_nenhuma_entrada_se_autoconfirma(self):
+        # `sync-cvm --registry` pode preencher cnpj/cvm_code a partir do
+        # cadastro oficial da CVM (dado real, nao inventado) -- mas
+        # `confirmed` so vira true por edicao manual do YAML, nunca pelo
+        # pipeline (fase1.md 52 e 123: conferencia humana e obrigatoria antes
+        # de tratar um identificador oficial como definitivo).
         for ticker, mapping in load_company_mapping()["mappings"].items():
-            assert mapping["cnpj"] is None, f"{ticker} tem CNPJ nao verificado"
-            assert mapping["confirmed"] is False, f"{ticker} marcado como confirmado sem fonte"
+            assert mapping["confirmed"] is False, f"{ticker} marcado como confirmado sem revisao humana"
+            if mapping["cnpj"] is not None:
+                assert mapping["resolved_by"] is not None, f"{ticker} tem CNPJ sem indicar como foi resolvido"

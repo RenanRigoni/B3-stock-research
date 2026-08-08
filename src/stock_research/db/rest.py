@@ -14,6 +14,8 @@ psycopg sozinho -- nenhum chamador precisa mudar.
 from __future__ import annotations
 
 import json
+import re
+from datetime import date, datetime
 from typing import Any
 
 import httpx
@@ -94,6 +96,37 @@ def _request(method: str, path: str, **kwargs: Any) -> httpx.Response:
 # ---------------------------------------------------------------------------
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}")
+
+
+def _coerce_temporal(value: Any) -> Any:
+    """PostgREST devolve ``date``/``timestamptz`` como string JSON; o backend
+    ``psycopg`` devolve objetos ``date``/``datetime`` nativos via OID do driver.
+    Sem essa conversao, o mesmo codigo se comporta diferente dependendo do
+    backend ativo -- exatamente o que a fachada em ``db/__init__.py`` promete
+    nunca acontecer. Comparacoes point-in-time (``available_from <= boundary``)
+    dependem disso: comparar string com ``datetime`` levanta ``TypeError``.
+    """
+    if not isinstance(value, str):
+        return value
+    if _TIMESTAMP_RE.match(value):
+        try:
+            return datetime.fromisoformat(value.replace(" ", "T", 1).replace("Z", "+00:00"))
+        except ValueError:
+            return value
+    if _DATE_RE.match(value):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _coerce_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {k: _coerce_temporal(v) for k, v in row.items()}
+
+
 def fetch_all(query: str, params: list[Any] | None = None) -> list[dict[str, Any]]:
     """Executa um SELECT via RPC ``exec_sql``.
 
@@ -108,7 +141,9 @@ def fetch_all(query: str, params: list[Any] | None = None) -> list[dict[str, Any
         content=json.dumps({"query": sql_text}),
     )
     payload = response.json()
-    return payload if isinstance(payload, list) else []
+    if not isinstance(payload, list):
+        return []
+    return [_coerce_row(row) if isinstance(row, dict) else row for row in payload]
 
 
 def fetch_one(query: str, params: list[Any] | None = None) -> dict[str, Any] | None:
