@@ -323,17 +323,26 @@ def _print_news_outcome(ticker: str, outcome: dict[str, object]) -> None:
 def analyze_news(
     ticker: Annotated[str, typer.Option("--ticker")],
 ) -> None:
-    """Deduplicacao por similaridade e relevancia de noticias (fase1.md 29-31, 36)."""
+    """Dedup por similaridade, relevancia e classificacao heuristica (fase1.md 29-37)."""
     from stock_research.pipelines.news_analysis import analyze_news as run_analyze_news
+    from stock_research.pipelines.news_classification import classify_news as run_classify_news
 
-    outcome = run_analyze_news(ticker)
-    if outcome.get("status") == "failed":
-        console.print(f"[red]{ticker} FALHOU[/]: {outcome.get('error')}")
+    dedup_outcome = run_analyze_news(ticker)
+    if dedup_outcome.get("status") == "failed":
+        console.print(f"[red]{ticker} FALHOU (dedup/relevancia)[/]: {dedup_outcome.get('error')}")
         raise typer.Exit(code=1)
     console.print(
-        f"[green]{ticker}[/]: {outcome.get('articles_considered', 0)} artigo(s) analisado(s), "
-        f"{outcome.get('clusters', 0)} cluster(s) de duplicata ({outcome.get('clustered', 0)} artigo(s)), "
-        f"{outcome.get('rescored', 0)} score(s) de relevancia recalculado(s)"
+        f"[green]{ticker}[/]: {dedup_outcome.get('articles_considered', 0)} artigo(s) analisado(s), "
+        f"{dedup_outcome.get('clusters', 0)} cluster(s) de duplicata ({dedup_outcome.get('clustered', 0)} artigo(s)), "
+        f"{dedup_outcome.get('rescored', 0)} score(s) de relevancia recalculado(s)"
+    )
+
+    classify_outcome = run_classify_news(ticker)
+    if classify_outcome.get("status") == "failed":
+        console.print(f"[red]{ticker} FALHOU (classificacao)[/]: {classify_outcome.get('error')}")
+        raise typer.Exit(code=1)
+    console.print(
+        f"[green]{ticker}[/]: {classify_outcome.get('classified', 0)} noticia(s) classificada(s)"
     )
 
 
