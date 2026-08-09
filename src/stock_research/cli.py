@@ -312,10 +312,13 @@ def _print_news_outcome(ticker: str, outcome: dict[str, object]) -> None:
         console.print(f"[red]{ticker} FALHOU[/]: {outcome.get('error')}")
         return
     console.print(
-        f"[green]{ticker}[/]: query={outcome.get('query')!r} -- "
-        f"{outcome.get('fetched', 0)} artigo(s) buscado(s), "
+        f"[green]{ticker}[/]: {outcome.get('fetched', 0)} artigo(s) buscado(s), "
         f"{outcome.get('inserted', 0)} novo(s), {outcome.get('updated', 0)} atualizado(s), "
-        f"{outcome.get('links', 0)} link(s) empresa-artigo"
+        f"{outcome.get('links', 0)} link(s) empresa-artigo -- janelas: "
+        f"{outcome.get('windows_success', 0)} c/ resultado, {outcome.get('windows_empty', 0)} vazias, "
+        f"{outcome.get('windows_failed', 0)} falharam, {outcome.get('windows_skipped_backoff', 0)} em backoff, "
+        f"{outcome.get('windows_skipped_terminal', 0)} ja resolvidas, "
+        f"{outcome.get('windows_out_of_range', 0)} fora da cobertura do GDELT"
     )
 
 

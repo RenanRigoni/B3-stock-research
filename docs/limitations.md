@@ -21,6 +21,14 @@ que os dados **não** conseguem sustentar é parte do produto, não uma ressalva
   ausência de notícia.
 - **Cobertura varia com o tempo.** Períodos mais antigos são mais esparsos; comparar volume
   de notícias entre décadas é enganoso.
+- **A DOC API não cobre antes de 2017.** Confirmado na Fase 1.1: janelas de 2015 são
+  rejeitadas explicitamente (`"Invalid query start date."`, HTTP 200 — não é rate limit).
+  `pipelines/news.py` usa `2017-01-01` como corte mínimo. **O ecossistema GDELT tem dado mais
+  antigo** — o GKG (Global Knowledge Graph) e os datasets raw cobrem aproximadamente desde
+  fevereiro/2015 — mas isso é um produto diferente (BigQuery/arquivos raw, não a DOC API usada
+  aqui) e fica fora do escopo do MVP (fase1.md 25 já excluía GKG/BigQuery como dependência
+  obrigatória). Se o histórico 2015-2016 vier a ser necessário, a via é essa, não insistir na
+  DOC API pra esse período — ela já provou que recusa.
 - **Rate limit do GDELT é mais rígido na prática do que o documentado.** O erro 429 real diz
   "uma requisição a cada 5 segundos", mas em teste isolado (sem rajada) esse intervalo não foi
   suficiente — sugere limite por IP compartilhado. Backfills grandes podem precisar rodar bem

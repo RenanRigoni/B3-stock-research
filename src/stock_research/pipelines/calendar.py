@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from stock_research.db import fetch_all, fetch_one, upsert_many
+from stock_research.db import execute, fetch_all, fetch_one, insert_many
 from stock_research.logging import get_logger
 from stock_research.transforms.calendar import build_calendar_days
 
@@ -20,7 +20,15 @@ logger = get_logger(__name__)
 def rebuild_trading_calendar(exchange: str = "B3") -> dict[str, int]:
     """Reconstroi ``trading_calendar`` a partir dos pregoes observados do benchmark.
 
-    Idempotente: upsert por ``(exchange, trade_date)``.
+    Substituicao completa (delete + insert), nao upsert: ``trading_day_index``
+    e recalculado do zero a cada chamada a partir do conjunto INTEIRO de datas
+    do benchmark, entao alargar o historico desloca os indices de todas as
+    linhas existentes. Um upsert por ``(exchange, trade_date)`` nao evita isso
+    -- a tabela tambem tem UNIQUE ``(exchange, trading_day_index)``, que o
+    ON CONFLICT no outro par de colunas nao cobre, e a insercao esbarra nessa
+    segunda constraint quando um indice antigo e reatribuido a outra data.
+    Delete+insert e idempotente por construcao: mesmo conjunto de precos ->
+    mesmas linhas no final, nao importa quantas vezes rodar.
     """
     rows = fetch_all(
         "select distinct p.trade_date from public.daily_prices p "
@@ -46,20 +54,10 @@ def rebuild_trading_calendar(exchange: str = "B3") -> dict[str, int]:
         }
         for d in days
     ]
-    stats = upsert_many(
-        "trading_calendar",
-        calendar_rows,
-        conflict_columns=["exchange", "trade_date"],
-        update_columns=[
-            "is_trading_day",
-            "previous_trading_day",
-            "next_trading_day",
-            "trading_day_index",
-            "source",
-        ],
-    )
+    execute("delete from public.trading_calendar where exchange = %s", [exchange])
+    inserted = insert_many("trading_calendar", calendar_rows)
     logger.info("calendario reconstruido: %d pregoes (%s)", len(days), exchange)
-    return {"days": len(days), **stats}
+    return {"days": len(days), "inserted": inserted}
 
 
 def trading_day_offset(exchange: str, reference: date, offset: int) -> date | None:

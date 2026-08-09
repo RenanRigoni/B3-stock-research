@@ -200,3 +200,156 @@ com `available_from`, ações corporativas, contexto histórico de eventos, benc
 PETR4; VALE3 e ITUB4 precisam de uma nova rodada de `sync-news` fora do horário de pico do
 rate limit do GDELT antes de qualquer análise cross-company de notícias fazer sentido. Preços
 e fundamentos, que são o essencial para a Fase 2, já estão completos nas três.
+
+## Conclusão Fase 1.1
+
+> **Status: Fase 1.1 — implementação concluída; backfill histórico de notícias pendente.**
+> Operacional / aguardando conclusão da carga histórica de notícias. Todo o código,
+> schema, testes e documentação desta seção estão prontos e commitados. O que falta é
+> execução: PETR4 tem cobertura parcial (277 notícias, backfill 2017→hoje em andamento);
+> VALE3 e ITUB4 ainda em zero. **Não marcar como concluída até os três terem cobertura
+> real ou uma limitação comprovada da fonte para cada um.**
+
+Executada a partir de `fase1.1.md`, com a ordem de execução do §49. Objetivo: profundidade
+histórica de preços, cobertura real de notícias nas 3 empresas, e fechamento definitivo da
+base antes da Fase 2. Resultado: preços e infraestrutura fechados; notícias em progresso,
+limitadas por uma restrição real e documentada da fonte, não por falha do pipeline.
+
+### Preços
+
+**Por que existiam apenas 651 pregões?** Não era limitação do yfinance nem do
+`default_start` do config (que já dizia `2010-01-01`). Os runs reais gravados no banco
+(`ingestion_runs` run_id 3-8) tinham sido chamados manualmente com `--start 2024-01-01`
+durante testes de uma sessão anterior; depois disso só rodou `update_prices` incremental
+(forward-only, nunca revisita o passado). O gap 2010-2023 nunca tinha sido coberto por
+nenhum backfill real — não era bug de código, era um backfill completo que nunca tinha
+sido executado com o range correto.
+
+Ao rodar o backfill completo (`sync-prices --all --start 2010-01-01`), apareceram dois bugs
+reais, ambos só visíveis em escala/alcance maior que o testado antes:
+
+1. **`rebuild_trading_calendar` colidia em `UNIQUE(exchange, trading_day_index)`.** O
+   upsert usava `ON CONFLICT (exchange, trade_date)`, mas `trading_day_index` é recalculado
+   do zero a cada chamada a partir de TODO o histórico de preços do benchmark — alargar o
+   range desloca os índices de linhas já existentes, e o ON CONFLICT no par errado de colunas
+   não evita a colisão na constraint que não estava sendo mirada. Corrigido trocando upsert
+   por delete+insert (substituição completa, idempotente por construção).
+2. **Ruído de ponto flutuante em `adj_close` virava "correção do provedor" falsa.**
+   `_detect_data_changes` comparava o valor recém-buscado com o gravado usando tolerância
+   absoluta de `1e-6` — baixo demais para uma série ajustada recalculada por encadeamento de
+   fatores de proventos sobre 4000+ pregões (Yahoo recalcula toda a série a cada chamada;
+   diferenças de ~0,0015% aparecem sem nenhuma correção real ter ocorrido). Em 4124 linhas do
+   PETR4, 3367 (81%) foram falsamente marcadas como "corrigidas pelo provedor" numa
+   re-execução idêntica, 2 minutos depois, dos mesmos dados. Corrigido com tolerância
+   relativa (`1e-4`) especificamente para `adj_close`; `close`/`volume` continuam com o
+   limiar absoluto de sempre (valores brutos, sem essa recomputação).
+
+Ambos corrigidos com teste de regressão (`tests/unit/test_prices_pipeline_helpers.py`).
+Reexecução completa confirmou: zero `data_changes` espúrios, contagens estáveis.
+
+**Estado atual**: PETR4, VALE3, ITUB4 e IBOV — todos **2010-01-04 → 2026-08-07, 4124
+pregões cada, sem gap entre eles**. `daily_returns` com a mesma cobertura exata (4124 linhas
+por instrumento). Achados de qualidade (`extreme_return`, `high_low_consistency`) presentes
+em volume plausível para 16 anos de histórico, não investigados individualmente (não é
+critério de aceite desta etapa).
+
+### Notícias
+
+**Por que VALE3/ITUB4 estavam zerados?** Nenhum backfill histórico tinha sido executado
+para esses tickers ainda — só PETR4 tinha sido exercitado no fim da Fase 1. Não é bug.
+
+**O rate limit foi contornado corretamente?** Parcialmente, e com uma descoberta mais
+importante que o rate limit em si. O pipeline foi reescrito com:
+
+- **Checkpoint persistente** (`news_backfill_checkpoints`, migration
+  `20260808170000`): cada janela × idioma tentada grava status, tentativas e
+  `next_retry_at`. Um backfill interrompido retoma exatamente de onde parou, sem
+  reprocessar janelas já resolvidas — validado na prática (a sessão foi interrompida e
+  retomada mais de uma vez durante esta etapa; o checkpoint preservou o progresso).
+- **Status tipado por janela**: `success_with_results` / `success_empty` / `rate_limited`
+  / `timeout` / `http_error` / `parse_error` / `unsupported_date_range`. Nunca existe mais
+  "0 notícias" ambíguo — toda falha fica registrada como falha, com a causa.
+- **Multi-idioma**: `config/settings.yaml` (`news.languages: [portuguese, english]`) —
+  Vale e Petrobras têm cobertura internacional relevante que a Fase 1 não capturava.
+
+A descoberta real: **o GDELT DOC 2.0 API rejeita explicitamente janelas de 2015** — não
+com HTTP 429 (rate limit), mas com HTTP 200 e corpo texto puro `"Invalid query start
+date."`. Confirmado em 3 janelas distintas de jan/fev 2015 para PETR4. Isso não é uma
+falha do pipeline nem do rate limit — é a fonte dizendo que aquele período está fora da
+cobertura real dela. O alvo original do fase1.1.md (`2015 → hoje`) foi ajustado para
+`2017-01-01 → hoje` (`MIN_SUPPORTED_START` em `pipelines/news.py`), o início documentado
+publicamente da cobertura histórica da DOC API. Janelas inteiras antes desse corte são
+puladas sem gastar chamada de rede; qualquer rejeição adicional pós-corte é tratada de
+forma reativa e permanente (`unsupported_date_range`, nunca reprocessada em retry, ao
+contrário de rate limit/timeout/erro HTTP que são retomáveis).
+
+**Cobertura atual**: PETR4 com 277 artigos vinculados (129 herdados da Fase 1 + 148 novos
+nesta etapa, mais o que o backfill em andamento acrescentar). VALE3 e ITUB4 ainda em 0 —
+o backfill histórico para eles não tinha começado no momento deste relatório. O rate limit
+real neste ambiente provou ser severo mesmo com backoff de 60-120s entre tentativas
+isoladas (bem mais rígido que os "5s" documentados pela própria API) — um backfill de anos
+de histórico para 3 empresas é um processo de muitas horas, não minutos, e pode continuar
+depois desta sessão graças ao checkpoint.
+
+**Gaps que permanecem**: cobertura de VALE3/ITUB4 ainda não iniciada; cobertura de PETR4
+ainda não avança além de jul/2026 + a primeira semana de 2017 (backfill em andamento no
+momento deste relatório); taxa real de sucesso vs. falha por rate limit no backfill
+histórico completo ainda não medida em escala.
+
+### Eventos
+
+Reprocessados para PETR4 com a base de notícias expandida: **57 eventos, 45 confundidos
+(79%), 48 event studies**. Taxa de confounding alta é plausível (estatal com repercussão
+política/regulatória constante gera múltiplos fatos no mesmo pregão), mas não foi
+investigada a fundo — fica como ponto de atenção, não como bug confirmado. VALE3/ITUB4
+sem eventos ainda (dependem do backfill de notícias).
+
+### Fundamentos
+
+Point-in-time continua válido — nenhuma alteração de metodologia (fase1.1 §33, "não
+refazer"). 230.990 fatos, 242 documentos CVM, distribuídos como PETR4 87.886 / VALE3
+81.454 / ITUB4 61.650. **Mappings confirmados**: os 3 tickers resolvidos por CNPJ sem
+ambiguidade contra o cadastro oficial da CVM (2677 companhias, `sync-cvm --registry`),
+`config/company_mapping.yaml` agora com `confirmed: true`, `confirmed_at` e
+`confirmation_source` registrados nos 3.
+
+### Qualidade
+
+323 testes (12 novos desde o fim da Fase 1), ruff e mypy 100% limpos. Anti-look-ahead:
+os 12 testes formais de sempre + amostragem aleatória de 30 pares (ticker, data) cobrindo
+2011-2026 nas 3 empresas via `get_fundamentals_as_of` real contra o banco — 248.259 fatos
+verificados, **zero violações**. Idempotência de preços reverificada por reexecução
+completa (contagens estáveis, zero `data_changes` espúrio após a correção do ruído de
+`adj_close`).
+
+Como parte desta etapa, `supabase/migrations/` também foi reconciliado com o estado real
+do banco remoto: 4 migrations aplicadas anteriormente via MCP nunca tinham sido salvas como
+arquivo local (`ticker_aliases_natural_key`, `exec_sql_rpc_service_role_only`,
+`news_clusters_natural_key_and_cleanup`, `events_scope_vocab_and_natural_key`) — um clone
+novo do repo rodando `supabase db push` teria produzido um schema incompleto. Corrigido
+extraindo o SQL real de `supabase_migrations.schema_migrations` e gravando cada um como
+arquivo, na mesma sequência do remoto.
+
+### Limitações que permanecem
+
+1. Cobertura de notícias de VALE3/ITUB4 ainda em zero — backfill não iniciado nesta sessão.
+2. Cobertura de PETR4 ainda longe de `2017 → hoje` completo — rate limit real do ambiente
+   é o gargalo, não o código; checkpoint permite retomar sem perder progresso.
+3. `2017-01-01` como corte mínimo do GDELT é baseado em documentação pública da API +
+   evidência empírica de que 2015 é rejeitado — não foi confirmado ano a ano (2016 vs 2017)
+   contra este ambiente por causa do próprio rate limit que o achado documenta.
+4. Taxa de confounding de eventos em PETR4 (79%) não investigada a fundo.
+5. Survivorship bias permanece não resolvido — plano em `docs/survivorship_bias_plan.md`
+   (fase1.1 §35), nenhuma implementação ainda, deliberadamente fora do escopo desta etapa.
+
+### A Fase 1 (+ 1.1) está pronta para a Fase 2?
+
+**Sim para preços e fundamentos — que são a base direta da Fase 2 (valuation, qualidade).**
+Os dois estão agora com profundidade histórica real (2010-2026) e comprovadamente corretos
+(point-in-time, idempotência, zero look-ahead em amostragem real). A ressalva de notícias/
+eventos que fechava a Fase 1 original continua válida e ainda mais explícita agora: a causa
+raiz do gap não é mais "não tentamos ainda" (Fase 1) nem "bug no pipeline" (Fase 1.1 corrigiu
+os bugs reais que existiam) — é uma restrição real e documentada de rate limit do provedor
+gratuito neste ambiente específico. Nada na arquitetura bloqueia a Fase 2 de começar com
+preços e fundamentos; o backfill de notícias pode continuar em paralelo, usando o checkpoint
+para retomar sem perder trabalho já feito.

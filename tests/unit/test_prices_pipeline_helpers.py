@@ -23,6 +23,16 @@ class TestDiffers:
     def test_none_para_none_nao_conta_como_diferenca(self):
         assert _differs(None, None) is False
 
+    def test_ruido_de_recomputacao_do_adj_close_nao_conta_como_correcao(self):
+        # Caso real observado na Fase 1.1 (PETR4, 2010-01-04): valor gravado
+        # arredondado em numeric(20,6) vs valor recem-recalculado pelo Yahoo
+        # encadeando fatores de proventos sobre toda a serie -- ~0.0015% de
+        # diferenca, sem nenhuma correcao real ter ocorrido.
+        assert _differs(7.864796, 7.864911424013455, relative=True) is False
+
+    def test_correcao_real_do_adj_close_ainda_e_detectada_com_relative(self):
+        assert _differs(26.5, 13.25, relative=True) is True
+
 
 class TestStatusDeValidacao:
     def test_dentro_do_warning_e_ok(self):

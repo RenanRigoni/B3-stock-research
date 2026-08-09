@@ -76,6 +76,17 @@ backoff exponencial adicional em 429 (8s a 120s, com jitter) — mas rodando de 
 compartilhada, esperar mais que isso pode ser necessário. Validar de novo a partir de uma
 conexão pessoal antes de assumir que o throttle configurado é suficiente.
 
+**Cobertura histórica real confirmada (Fase 1.1):** janelas de 2015 são **rejeitadas
+explicitamente** pela API — HTTP 200 com corpo texto puro `"Invalid query start date."`
+(não é rate limit, é a fonte dizendo que aquela data está fora da cobertura dela).
+Confirmado em 3 janelas distintas de jan/fev 2015 para PETR4. O pipeline
+(`pipelines/news.py`, `MIN_SUPPORTED_START`) usa **2017-01-01** como corte mínimo — o
+início documentado publicamente da cobertura da DOC API — e trata qualquer rejeição
+adicional (mesmo pós-corte) de forma reativa e permanente (`unsupported_date_range`,
+nunca reprocessado). Isso não foi confirmado empiricamente ano a ano contra este
+ambiente por causa do rate limit (ver abaixo); se `2017-01-01` também for rejeitado na
+prática, o pipeline registra isso por janela em vez de mascarar.
+
 **Formato confirmado contra a API real** (modo `ArtList`, `format=json`):
 `{"articles": [{url, url_mobile, title, seendate, socialimage, domain, language,
 sourcecountry}]}`. Note a ausência de `tone` — esse campo pertence a outro

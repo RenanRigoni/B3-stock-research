@@ -1,24 +1,6 @@
 -- =============================================================================
--- Fase 1 -- Schema inicial
--- Sistema pessoal de analise historica de acoes da B3.
---
--- Traducao para Postgres/Supabase do schema descrito em fase1.md
--- (secoes 7, 8, 11, 13, 14, 16, 21, 22, 28, 29, 33, 38, 41, 46, 51, 58,
---  59, 60, 64, 65, 88, 93-99).
---
--- Principios inegociaveis refletidos aqui:
---   * point-in-time: todo fato tem "quando ficou disponivel", nao so
---     "a que periodo se refere" (available_from / filing_received_at);
---   * rastreabilidade: toda linha aponta para o run e o arquivo raw que a
---     originou (run_id / raw_file / source_row_hash);
---   * idempotencia: chaves naturais UNIQUE permitem upsert seguro;
---   * nada e sobrescrito em silencio: reapresentacoes e correcoes viram
---     novas versoes + registro em data_changes.
+-- Fase 1 -- Schema inicial (ver supabase/migrations/20260808000001_initial_schema.sql)
 -- =============================================================================
-
--- -----------------------------------------------------------------------------
--- 0. Helpers
--- -----------------------------------------------------------------------------
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -35,11 +17,7 @@ $$;
 comment on function public.set_updated_at is
   'Trigger helper: mantem updated_at sincronizado em UPDATE.';
 
-
--- -----------------------------------------------------------------------------
--- 1. Linhagem e auditoria (fase1.md 64, 65, 98, 99)
---    Criado primeiro porque quase todas as tabelas referenciam run_id.
--- -----------------------------------------------------------------------------
+-- 1. Linhagem e auditoria -----------------------------------------------------
 
 create table public.ingestion_runs (
   run_id           bigint generated always as identity primary key,
@@ -66,7 +44,6 @@ comment on table public.ingestion_runs is
 create index ingestion_runs_pipeline_started_idx
   on public.ingestion_runs (pipeline, started_at desc);
 
-
 create table public.raw_files (
   raw_file_id   bigint generated always as identity primary key,
   file_path     text        not null,
@@ -77,14 +54,11 @@ create table public.raw_files (
   bytes         bigint,
   downloaded_at timestamptz not null default now(),
   run_id        bigint      references public.ingestion_runs (run_id),
-  -- O mesmo caminho pode ser rebaixado com conteudo diferente (ex.: a CVM
-  -- reprocessa um ZIP). Guardamos as duas versoes, nunca sobrescrevemos.
   constraint raw_files_path_hash_key unique (file_path, sha256)
 );
 
 comment on table public.raw_files is
   'Inventario de arquivos brutos em disco com checksum, para deteccao de mudanca na fonte.';
-
 
 create table public.data_changes (
   change_id   bigint generated always as identity primary key,
@@ -104,7 +78,6 @@ comment on table public.data_changes is
 
 create index data_changes_table_detected_idx
   on public.data_changes (table_name, detected_at desc);
-
 
 create table public.manual_overrides (
   override_id  bigint generated always as identity primary key,
@@ -131,7 +104,6 @@ create trigger manual_overrides_set_updated_at
   before update on public.manual_overrides
   for each row execute function public.set_updated_at();
 
-
 create table public.quality_findings (
   finding_id  bigint generated always as identity primary key,
   run_id      bigint      references public.ingestion_runs (run_id),
@@ -154,10 +126,7 @@ create index quality_findings_open_idx
   on public.quality_findings (severity, detected_at desc)
   where resolved_at is null;
 
-
--- -----------------------------------------------------------------------------
--- 2. Cadastro mestre (fase1.md 7, 8, 50)
--- -----------------------------------------------------------------------------
+-- 2. Cadastro mestre ----------------------------------------------------------
 
 create table public.instruments (
   instrument_id      bigint generated always as identity primary key,
@@ -177,11 +146,7 @@ create table public.instruments (
   segment            text,
   currency           text        not null default 'BRL',
   exchange           text        not null default 'B3',
-  -- Benchmarks (^BVSP) vivem aqui como instrumento proprio: um unico
-  -- pipeline de precos serve acao e indice (fase1.md 15).
   is_benchmark       boolean     not null default false,
-  -- Flags setoriais: impedem aplicar metrica inadequada, nao resolvem
-  -- valuation setorial nesta fase (fase1.md 50).
   financial_company  boolean     not null default false,
   utility            boolean     not null default false,
   commodity_exposed  boolean     not null default false,
@@ -212,7 +177,6 @@ create trigger instruments_set_updated_at
   before update on public.instruments
   for each row execute function public.set_updated_at();
 
-
 create table public.ticker_aliases (
   alias_id      bigint generated always as identity primary key,
   instrument_id bigint      not null references public.instruments (instrument_id)
@@ -233,8 +197,6 @@ comment on table public.ticker_aliases is
 create index ticker_aliases_ticker_idx on public.ticker_aliases (ticker);
 create index ticker_aliases_instrument_idx on public.ticker_aliases (instrument_id);
 
-
--- Aliases textuais usados na busca de noticias (fase1.md 26).
 create table public.company_aliases (
   company_alias_id bigint generated always as identity primary key,
   instrument_id    bigint      not null references public.instruments (instrument_id)
@@ -242,8 +204,6 @@ create table public.company_aliases (
   alias            text        not null,
   alias_kind       text        not null default 'name'
                      check (alias_kind in ('name', 'legal_name', 'ticker', 'brand', 'other')),
-  -- Alias "forte" identifica a empresa sozinho ("Petrobras").
-  -- Alias fraco gera ruido e so conta acompanhado ("Vale" -> tambem substantivo comum).
   is_strong        boolean     not null default true,
   created_at       timestamptz not null default now(),
   constraint company_aliases_key unique (instrument_id, alias)
@@ -252,10 +212,7 @@ create table public.company_aliases (
 comment on table public.company_aliases is
   'Termos de busca por empresa. is_strong=false marca alias ambiguo que gera falso positivo.';
 
-
--- -----------------------------------------------------------------------------
--- 3. Calendario de negociacao (fase1.md 16)
--- -----------------------------------------------------------------------------
+-- 3. Calendario de negociacao -------------------------------------------------
 
 create table public.trading_calendar (
   exchange              text    not null default 'B3',
@@ -263,8 +220,6 @@ create table public.trading_calendar (
   is_trading_day        boolean not null,
   previous_trading_day  date,
   next_trading_day      date,
-  -- Indice sequencial apenas sobre pregoes: D+N e aritmetica sobre esta coluna,
-  -- nunca sobre dias corridos.
   trading_day_index     integer,
   source                text    not null,
   created_at            timestamptz not null default now(),
@@ -278,18 +233,13 @@ create unique index trading_calendar_index_key
   on public.trading_calendar (exchange, trading_day_index)
   where trading_day_index is not null;
 
-
--- -----------------------------------------------------------------------------
--- 4. Precos (fase1.md 11, 12, 13, 14, 21, 22)
--- -----------------------------------------------------------------------------
+-- 4. Precos -------------------------------------------------------------------
 
 create table public.daily_prices (
   price_id      bigint generated always as identity primary key,
   instrument_id bigint      not null references public.instruments (instrument_id)
                               on delete cascade,
   trade_date    date        not null,
-  -- OHLC bruto e preco ajustado convivem separados. Nunca substituir close por
-  -- adj_close em silencio (fase1.md 12).
   open          numeric(20, 6),
   high          numeric(20, 6),
   low           numeric(20, 6),
@@ -299,14 +249,11 @@ create table public.daily_prices (
   currency      text        not null default 'BRL',
   source        text        not null,
   source_symbol text,
-  -- yfinance repair=True altera valores. Marcamos para nunca tratar dado
-  -- reparado como se fosse a fonte original (fase1.md 10).
   is_repaired   boolean     not null default false,
   raw_file      text,
   run_id        bigint      references public.ingestion_runs (run_id),
   ingested_at   timestamptz not null default now(),
   updated_at    timestamptz not null default now(),
-  -- Chave logica da fase1.md 11: multiplas fontes coexistem para a mesma data.
   constraint daily_prices_key unique (instrument_id, trade_date, source),
   constraint daily_prices_high_low_ck check (high is null or low is null or high >= low)
 );
@@ -321,7 +268,6 @@ create index daily_prices_date_idx on public.daily_prices (trade_date);
 create trigger daily_prices_set_updated_at
   before update on public.daily_prices
   for each row execute function public.set_updated_at();
-
 
 create table public.corporate_actions (
   action_id     bigint generated always as identity primary key,
@@ -338,8 +284,6 @@ create table public.corporate_actions (
   raw_payload   jsonb,
   run_id        bigint      references public.ingestion_runs (run_id),
   ingested_at   timestamptz not null default now(),
-  -- Quando a fonte nao diferencia dividendo de JCP, gravamos o tipo que ela
-  -- realmente informa. Nunca inventar classificacao (fase1.md 13).
   constraint corporate_actions_key unique nulls not distinct
     (instrument_id, action_date, action_type, source, value)
 );
@@ -349,7 +293,6 @@ comment on table public.corporate_actions is
 
 create index corporate_actions_instrument_date_idx
   on public.corporate_actions (instrument_id, action_date desc);
-
 
 create table public.daily_returns (
   instrument_id           bigint  not null references public.instruments (instrument_id)
@@ -381,7 +324,6 @@ comment on table public.daily_returns is
 
 create index daily_returns_date_idx on public.daily_returns (trade_date);
 
-
 create table public.price_validations (
   validation_id  bigint generated always as identity primary key,
   instrument_id  bigint      not null references public.instruments (instrument_id)
@@ -402,10 +344,7 @@ create table public.price_validations (
 comment on table public.price_validations is
   'Comparacao cruzada entre provedores. Divergencia NAO e corrigida automaticamente (fase1.md 21).';
 
-
--- -----------------------------------------------------------------------------
--- 5. Noticias (fase1.md 28-37)
--- -----------------------------------------------------------------------------
+-- 5. Noticias -----------------------------------------------------------------
 
 create table public.news_articles (
   article_id            bigint generated always as identity primary key,
@@ -425,18 +364,14 @@ create table public.news_articles (
   published_at_utc      timestamptz,
   published_at_local    timestamptz,
   source_timezone       text,
-  -- Nunca fingir precisao inexistente: artigo so com data recebe date_only
-  -- e a politica conservadora de effective_trade_date se aplica (fase1.md 39).
   time_precision        text        not null default 'unknown'
                           check (time_precision in ('exact', 'hour', 'date_only', 'unknown')),
   seen_at               timestamptz,
   tone                  double precision,
   image_url             text,
   query_used            text,
-  -- Deduplicacao (fase1.md 30): copias sao preservadas, nunca apagadas.
   duplicate_cluster_id  bigint,
   is_cluster_canonical  boolean     not null default false,
-  -- Texto completo e opcional; falha na extracao nao pode quebrar o pipeline.
   article_text          text,
   text_extraction_status text       not null default 'not_attempted'
                           check (text_extraction_status in ('success', 'unavailable', 'blocked',
@@ -465,7 +400,6 @@ create trigger news_articles_set_updated_at
   before update on public.news_articles
   for each row execute function public.set_updated_at();
 
-
 create table public.news_clusters (
   cluster_id             bigint generated always as identity primary key,
   canonical_article_id   bigint      references public.news_articles (article_id)
@@ -493,7 +427,6 @@ alter table public.news_articles
   foreign key (duplicate_cluster_id)
   references public.news_clusters (cluster_id) on delete set null;
 
-
 create table public.news_company_links (
   link_id            bigint generated always as identity primary key,
   article_id         bigint      not null references public.news_articles (article_id)
@@ -516,7 +449,6 @@ comment on table public.news_company_links is
 create index news_company_links_instrument_idx
   on public.news_company_links (instrument_id, relevance_score desc);
 
-
 create table public.news_analysis (
   analysis_id         bigint generated always as identity primary key,
   article_id          bigint      not null references public.news_articles (article_id)
@@ -524,8 +456,6 @@ create table public.news_analysis (
   instrument_id       bigint      references public.instruments (instrument_id) on delete cascade,
   category            text,
   subcategory         text,
-  -- sentiment e impact sao coisas diferentes: "investimento de R$ 100 bi" pode
-  -- ser positivo na linguagem e ambiguo no impacto economico (fase1.md 33).
   sentiment           text        check (sentiment in ('positive', 'neutral', 'negative', 'mixed',
                                                        'unknown')),
   sentiment_score     double precision,
@@ -541,10 +471,8 @@ create table public.news_analysis (
                         check (analysis_method in ('heuristic', 'local_model', 'llm', 'manual')),
   analysis_model      text,
   analysis_version    text        not null,
-  -- Nada de caixa preta: o score precisa ser explicavel (fase1.md 119).
   explanation         jsonb       not null default '{}'::jsonb,
   analyzed_at         timestamptz not null default now(),
-  -- Classificacoes de metodos/versoes diferentes coexistem sem se misturar.
   constraint news_analysis_key unique nulls not distinct
     (article_id, instrument_id, analysis_method, analysis_version)
 );
@@ -555,10 +483,7 @@ comment on table public.news_analysis is
 create index news_analysis_article_idx on public.news_analysis (article_id);
 create index news_analysis_category_idx on public.news_analysis (category);
 
-
--- -----------------------------------------------------------------------------
--- 6. Fundamentos CVM (fase1.md 42-52)
--- -----------------------------------------------------------------------------
+-- 6. Fundamentos CVM ----------------------------------------------------------
 
 create table public.cvm_documents (
   document_id       bigint generated always as identity primary key,
@@ -568,8 +493,6 @@ create table public.cvm_documents (
   document_type     text        not null check (document_type in ('DFP', 'ITR', 'FRE', 'FCA',
                                                                   'IPE', 'other')),
   reference_date    date        not null,
-  -- Data em que o documento foi entregue/publicado. E ela, nao reference_date,
-  -- que define o que o mercado sabia (fase1.md 47).
   filing_received_at timestamptz,
   available_from    timestamptz,
   version           text,
@@ -591,7 +514,6 @@ create index cvm_documents_instrument_idx
   on public.cvm_documents (instrument_id, reference_date desc);
 create index cvm_documents_available_idx on public.cvm_documents (available_from);
 
-
 create table public.financial_statement_facts (
   fact_id             bigint generated always as identity primary key,
   document_id         bigint      references public.cvm_documents (document_id) on delete cascade,
@@ -606,7 +528,6 @@ create table public.financial_statement_facts (
   filing_received_at  timestamptz,
   available_from      timestamptz,
   version             text,
-  -- account_code (CD_CONTA) e o identificador estavel da conta. Nunca descartar.
   account_code        text        not null,
   account_description text,
   value               numeric(30, 6),
@@ -629,13 +550,11 @@ create index financial_statement_facts_lookup_idx
 create index financial_statement_facts_available_idx
   on public.financial_statement_facts (instrument_id, available_from desc);
 
-
 create table public.fundamental_metrics (
   metric_id           bigint generated always as identity primary key,
   instrument_id       bigint      not null references public.instruments (instrument_id)
                                     on delete cascade,
   reference_date      date        not null,
-  -- Obrigatorio. Sem available_from nao existe analise point-in-time honesta.
   available_from      timestamptz not null,
   period_type         text        not null check (period_type in ('annual', 'quarterly',
                                                                   'ttm', 'ytd', 'point_in_time')),
@@ -644,7 +563,6 @@ create table public.fundamental_metrics (
   unit                text,
   calculation_version text        not null default 'fundamental_metrics_v1',
   source_document_ids bigint[],
-  -- Conta ausente vira NULL + motivo. Nunca inventar valor (fase1.md 49).
   quality_flag        text        not null default 'ok'
                         check (quality_flag in ('ok', 'estimated', 'incomplete', 'not_applicable',
                                                 'missing_input', 'sector_inadequate')),
@@ -661,10 +579,7 @@ comment on table public.fundamental_metrics is
 create index fundamental_metrics_asof_idx
   on public.fundamental_metrics (instrument_id, metric_name, available_from desc);
 
-
--- -----------------------------------------------------------------------------
--- 7. Eventos e event study (fase1.md 38-41, 53-60, 93-96)
--- -----------------------------------------------------------------------------
+-- 7. Eventos e event study ----------------------------------------------------
 
 create table public.events (
   event_id                 bigint generated always as identity primary key,
@@ -677,12 +592,10 @@ create table public.events (
   event_time_utc           timestamptz,
   event_time_local         timestamptz,
   event_date               date        not null,
-  -- Primeiro pregao que poderia reagir. Campo critico (fase1.md 39).
   effective_trade_date     date,
   time_precision           text        not null default 'unknown'
                              check (time_precision in ('exact', 'hour', 'date_only', 'unknown')),
   market_session_uncertain boolean     not null default false,
-  -- Escopo: se o minerio cai 10% e todas as mineradoras caem, nao e noticia da Vale.
   scope                    text        not null default 'unknown'
                              check (scope in ('company_specific', 'sector', 'macro', 'unknown')),
   source_type              text        not null
@@ -693,11 +606,8 @@ create table public.events (
   sentiment                text,
   impact_score             numeric(4, 3) check (impact_score between 0 and 1),
   confidence               numeric(4, 3) check (confidence between 0 and 1),
-  -- Eventos simultaneos contaminam a leitura: balanco + troca de CEO no mesmo dia
-  -- nao permitem atribuir a reacao a um so (fase1.md 93).
   overlapping_event_count  integer     not null default 0,
   is_confounded            boolean     not null default false,
-  -- Movimento forte sem noticia encontrada fica "unresolved". Nao inventamos causa.
   news_explanation_status  text        not null default 'not_applicable'
                              check (news_explanation_status in ('resolved', 'partial',
                                                                 'unresolved', 'not_applicable')),
@@ -718,7 +628,6 @@ create trigger events_set_updated_at
   before update on public.events
   for each row execute function public.set_updated_at();
 
-
 create table public.event_articles (
   event_id     bigint  not null references public.events (event_id) on delete cascade,
   article_id   bigint  not null references public.news_articles (article_id) on delete cascade,
@@ -732,7 +641,6 @@ create table public.event_articles (
 
 comment on table public.event_articles is
   'Ligacao evento <-> artigos que o reportam.';
-
 
 create table public.event_studies (
   event_study_id          bigint generated always as identity primary key,
@@ -753,7 +661,6 @@ create table public.event_studies (
   beta                    double precision,
   r_squared               double precision,
   residual_std            double precision,
-  -- Amostra pequena na janela de estimacao invalida alpha/beta: sinalizar, nao esconder.
   low_sample              boolean     not null default false,
   volume_ratio_20         double precision,
   volume_zscore_20        double precision,
@@ -773,12 +680,9 @@ comment on table public.event_studies is
 create index event_studies_instrument_idx
   on public.event_studies (instrument_id, effective_trade_date desc);
 
-
 create table public.event_study_returns (
   event_study_id    bigint  not null references public.event_studies (event_study_id)
                               on delete cascade,
-  -- Horizonte em PREGOES, nao dias corridos. Negativo = janela pre-evento
-  -- (fase1.md 59): a noticia pode apenas confirmar o que ja estava no preco.
   horizon_days      integer not null,
   return_actual     double precision,
   benchmark_return  double precision,
@@ -787,7 +691,6 @@ create table public.event_study_returns (
   abnormal_return   double precision,
   car               double precision,
   end_trade_date    date,
-  -- Sem horizonte completo: NULL + is_censored, nunca um numero inventado.
   is_censored       boolean not null default false,
   primary key (event_study_id, horizon_days)
 );
@@ -795,10 +698,7 @@ create table public.event_study_returns (
 comment on table public.event_study_returns is
   'Retornos por horizonte, em pregoes. Horizonte negativo cobre a janela pre-evento.';
 
-
--- -----------------------------------------------------------------------------
--- 8. Macro -- apenas a estrutura, sem pipeline nesta fase (fase1.md 95)
--- -----------------------------------------------------------------------------
+-- 8. Macro (apenas estrutura) -------------------------------------------------
 
 create table public.macro_series (
   macro_id       bigint generated always as identity primary key,
@@ -817,321 +717,3 @@ create table public.macro_series (
 comment on table public.macro_series is
   'Reservado para Selic/CDI/IPCA/dolar/commodities. Estrutura criada; pipeline fica para depois.';
 
-
--- =============================================================================
--- 9. Views (fase1.md 88)
---    security_invoker=true: a view respeita o RLS das tabelas base em vez de
---    rodar com os privilegios do dono.
--- =============================================================================
-
-create view public.v_latest_prices with (security_invoker = true) as
-select distinct on (p.instrument_id, p.source)
-       p.instrument_id,
-       i.ticker,
-       i.company_name,
-       p.source,
-       p.trade_date,
-       p.close,
-       p.adj_close,
-       p.volume,
-       p.currency,
-       p.is_repaired,
-       p.ingested_at
-from public.daily_prices p
-join public.instruments i using (instrument_id)
-order by p.instrument_id, p.source, p.trade_date desc;
-
-comment on view public.v_latest_prices is 'Ultimo preco disponivel por instrumento e fonte.';
-
-
-create view public.v_price_returns with (security_invoker = true) as
-select r.instrument_id,
-       i.ticker,
-       r.trade_date,
-       r.price_source,
-       r.close,
-       r.adj_close,
-       r.return_1d_price,
-       r.return_1d_adjusted,
-       r.log_return_1d,
-       r.volume,
-       r.volume_ratio_20,
-       r.volume_zscore_20,
-       r.benchmark_return_1d,
-       r.excess_return_1d,
-       r.calculation_version
-from public.daily_returns r
-join public.instruments i using (instrument_id);
-
-
-create view public.v_canonical_news with (security_invoker = true) as
-select a.article_id,
-       a.duplicate_cluster_id,
-       c.article_count,
-       c.unique_domains,
-       c.first_seen,
-       c.last_seen,
-       a.canonical_url,
-       a.domain,
-       a.source_name,
-       a.title,
-       a.language,
-       a.published_at_utc,
-       a.published_at_local,
-       a.time_precision,
-       a.provider
-from public.news_articles a
-left join public.news_clusters c on c.cluster_id = a.duplicate_cluster_id
-where a.is_cluster_canonical or a.duplicate_cluster_id is null;
-
-comment on view public.v_canonical_news is
-  'Um artigo por cluster. As republicacoes continuam gravadas em news_articles.';
-
-
-create view public.v_news_with_company with (security_invoker = true) as
-select a.article_id,
-       l.instrument_id,
-       i.ticker,
-       i.company_name,
-       l.relevance_score,
-       l.is_primary_company,
-       l.match_method,
-       l.review_status,
-       a.title,
-       a.canonical_url,
-       a.domain,
-       a.published_at_utc,
-       a.published_at_local,
-       a.time_precision,
-       a.duplicate_cluster_id,
-       a.is_cluster_canonical
-from public.news_company_links l
-join public.news_articles a using (article_id)
-join public.instruments i using (instrument_id);
-
-
-create view public.v_events with (security_invoker = true) as
-select e.event_id,
-       e.instrument_id,
-       i.ticker,
-       i.company_name,
-       e.event_type,
-       e.event_subtype,
-       e.event_title,
-       e.event_date,
-       e.effective_trade_date,
-       e.time_precision,
-       e.scope,
-       e.source_type,
-       e.relevance_score,
-       e.sentiment,
-       e.impact_score,
-       e.is_confounded,
-       e.overlapping_event_count,
-       e.news_explanation_status,
-       (select count(*) from public.event_articles ea where ea.event_id = e.event_id)
-         as article_count
-from public.events e
-join public.instruments i using (instrument_id);
-
-
-create view public.v_fundamentals_as_reported with (security_invoker = true) as
-select f.fact_id,
-       f.instrument_id,
-       i.ticker,
-       f.document_type,
-       f.statement_type,
-       f.reference_date,
-       f.period_start,
-       f.period_end,
-       f.available_from,
-       f.version,
-       f.account_code,
-       f.account_description,
-       f.value,
-       f.currency,
-       f.scale,
-       f.is_consolidated
-from public.financial_statement_facts f
-join public.instruments i using (instrument_id);
-
-comment on view public.v_fundamentals_as_reported is
-  'Todos os fatos, todas as versoes. Use com filtro available_from <= data para point-in-time.';
-
-
-create view public.v_fundamentals_latest_restated with (security_invoker = true) as
-select distinct on (f.instrument_id, f.statement_type, f.reference_date, f.account_code,
-                    f.is_consolidated)
-       f.instrument_id,
-       i.ticker,
-       f.statement_type,
-       f.reference_date,
-       f.account_code,
-       f.account_description,
-       f.is_consolidated,
-       f.value,
-       f.currency,
-       f.scale,
-       f.version,
-       f.available_from
-from public.financial_statement_facts f
-join public.instruments i using (instrument_id)
-order by f.instrument_id, f.statement_type, f.reference_date, f.account_code, f.is_consolidated,
-         f.available_from desc nulls last, f.fact_id desc;
-
-comment on view public.v_fundamentals_latest_restated is
-  'Ultima versao conhecida de cada conta. NAO usar em backtest -- contem reapresentacoes futuras.';
-
-
-create view public.v_event_study_summary with (security_invoker = true) as
-select es.event_study_id,
-       es.event_id,
-       es.instrument_id,
-       i.ticker,
-       e.event_type,
-       e.event_title,
-       e.scope,
-       e.is_confounded,
-       es.effective_trade_date,
-       es.method,
-       es.price_series,
-       es.alpha,
-       es.beta,
-       es.r_squared,
-       es.observations,
-       es.low_sample,
-       es.data_quality,
-       es.volume_ratio_20,
-       max(r.return_actual)   filter (where r.horizon_days = -20) as return_pre_20,
-       max(r.return_actual)   filter (where r.horizon_days = -5)  as return_pre_5,
-       max(r.return_actual)   filter (where r.horizon_days = 0)   as return_d0,
-       max(r.return_actual)   filter (where r.horizon_days = 1)   as return_d1,
-       max(r.return_actual)   filter (where r.horizon_days = 5)   as return_d5,
-       max(r.return_actual)   filter (where r.horizon_days = 20)  as return_d20,
-       max(r.return_actual)   filter (where r.horizon_days = 60)  as return_d60,
-       max(r.return_actual)   filter (where r.horizon_days = 252) as return_d252,
-       max(r.excess_return)   filter (where r.horizon_days = 1)   as excess_d1,
-       max(r.excess_return)   filter (where r.horizon_days = 5)   as excess_d5,
-       max(r.excess_return)   filter (where r.horizon_days = 20)  as excess_d20,
-       max(r.excess_return)   filter (where r.horizon_days = 252) as excess_d252,
-       max(r.car)             filter (where r.horizon_days = 1)   as car_0_1,
-       max(r.car)             filter (where r.horizon_days = 5)   as car_0_5,
-       max(r.car)             filter (where r.horizon_days = 20)  as car_0_20,
-       bool_or(r.is_censored)                                     as has_censored_horizon
-from public.event_studies es
-join public.events e using (event_id)
-join public.instruments i on i.instrument_id = es.instrument_id
-left join public.event_study_returns r using (event_study_id)
-group by es.event_study_id, es.event_id, es.instrument_id, i.ticker, e.event_type,
-         e.event_title, e.scope, e.is_confounded, es.effective_trade_date, es.method,
-         es.price_series, es.alpha, es.beta, es.r_squared, es.observations, es.low_sample,
-         es.data_quality, es.volume_ratio_20;
-
-comment on view public.v_event_study_summary is
-  'Formato largo do event study, para leitura humana e export. A fonte normalizada e event_study_returns.';
-
-
-create view public.v_data_coverage with (security_invoker = true) as
-select i.instrument_id,
-       i.ticker,
-       i.company_name,
-       i.active,
-       (select min(trade_date) from public.daily_prices p
-         where p.instrument_id = i.instrument_id)              as price_first_date,
-       (select max(trade_date) from public.daily_prices p
-         where p.instrument_id = i.instrument_id)              as price_last_date,
-       (select count(*) from public.daily_prices p
-         where p.instrument_id = i.instrument_id)              as price_rows,
-       (select count(*) from public.corporate_actions ca
-         where ca.instrument_id = i.instrument_id)             as corporate_actions,
-       (select count(*) from public.news_company_links l
-         where l.instrument_id = i.instrument_id)              as news_links,
-       (select count(distinct a.duplicate_cluster_id)
-          from public.news_company_links l
-          join public.news_articles a using (article_id)
-         where l.instrument_id = i.instrument_id)              as news_clusters,
-       (select count(*) from public.cvm_documents d
-         where d.instrument_id = i.instrument_id)              as cvm_documents,
-       (select max(reference_date) from public.cvm_documents d
-         where d.instrument_id = i.instrument_id)              as cvm_last_reference,
-       (select count(*) from public.events e
-         where e.instrument_id = i.instrument_id)              as events,
-       (select count(*) from public.event_studies es
-         where es.instrument_id = i.instrument_id)             as event_studies
-from public.instruments i;
-
-comment on view public.v_data_coverage is
-  'Cobertura por instrumento. Base do comando `stock-research status`.';
-
-
-create view public.v_manual_review_queue with (security_invoker = true) as
--- Movimento forte sem evento associado: candidato a investigacao manual.
-select 'unexplained_move'::text                      as reason,
-       r.instrument_id,
-       i.ticker,
-       r.trade_date                                  as ref_date,
-       'daily_returns'::text                         as entity_type,
-       r.instrument_id::text || ':' || r.trade_date::text as entity_id,
-       jsonb_build_object('return_1d_adjusted', r.return_1d_adjusted,
-                          'volume_ratio_20', r.volume_ratio_20) as details
-from public.daily_returns r
-join public.instruments i using (instrument_id)
-where abs(coalesce(r.return_1d_adjusted, 0)) >= 0.07
-  and not exists (select 1 from public.events e
-                   where e.instrument_id = r.instrument_id
-                     and e.effective_trade_date = r.trade_date)
-
-union all
-
--- Artigo ligado a empresa com relevancia ambigua.
-select 'ambiguous_relevance',
-       l.instrument_id,
-       i.ticker,
-       a.published_at_utc::date,
-       'news_company_links',
-       l.link_id::text,
-       jsonb_build_object('relevance_score', l.relevance_score, 'title', a.title)
-from public.news_company_links l
-join public.news_articles a using (article_id)
-join public.instruments i using (instrument_id)
-where l.relevance_score between 0.40 and 0.60
-  and l.review_status = 'auto'
-
-union all
-
--- Noticia sem timestamp confiavel: effective_trade_date fica conservador.
-select 'missing_timestamp',
-       l.instrument_id,
-       i.ticker,
-       a.published_at_utc::date,
-       'news_articles',
-       a.article_id::text,
-       jsonb_build_object('time_precision', a.time_precision, 'title', a.title)
-from public.news_articles a
-join public.news_company_links l using (article_id)
-join public.instruments i using (instrument_id)
-where a.time_precision in ('date_only', 'unknown');
-
-comment on view public.v_manual_review_queue is
-  'Fila de revisao humana: movimentos sem explicacao, relevancia ambigua, timestamp incerto.';
-
-
--- =============================================================================
--- 10. RLS
---    O banco e privado e so e acessado pelo pipeline local via service_role
---    (que ignora RLS). Habilitamos RLS SEM policies em tudo: qualquer chave
---    anon/authenticated que vaze nao le nada. Quando a Fase 4 expuser um app
---    no Vercel, as policies de leitura serao adicionadas conscientemente.
--- =============================================================================
-
-do $$
-declare
-  t text;
-begin
-  for t in
-    select tablename from pg_tables where schemaname = 'public'
-  loop
-    execute format('alter table public.%I enable row level security', t);
-  end loop;
-end;
-$$;

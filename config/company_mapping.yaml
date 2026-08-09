@@ -29,21 +29,24 @@ mappings:
     legal_name: PETRÓLEO BRASILEIRO S.A. - PETROBRAS
     isin: null
     resolved_by: cnpj
-    confirmed: false
-    confirmed_at: null
+    confirmed: true
+    confirmed_at: "2026-08-08T14:05:57Z"
+    confirmation_source: "CNPJ casado sem ambiguidade contra cad_cia_aberta.csv oficial da CVM (2677 companhias, sync-cvm --registry run_id=101)"
   VALE3:
     cnpj: 33.592.510/0001-54
     cvm_code: '4170'
     legal_name: VALE S.A.
     isin: null
     resolved_by: cnpj
-    confirmed: false
-    confirmed_at: null
+    confirmed: true
+    confirmed_at: "2026-08-08T14:05:57Z"
+    confirmation_source: "CNPJ casado sem ambiguidade contra cad_cia_aberta.csv oficial da CVM (2677 companhias, sync-cvm --registry run_id=101)"
   ITUB4:
     cnpj: 60.872.504/0001-23
     cvm_code: '1279'
     legal_name: ITAÚ UNIBANCO HOLDING S.A.
     isin: null
     resolved_by: cnpj
-    confirmed: false
-    confirmed_at: null
+    confirmed: true
+    confirmed_at: "2026-08-08T14:05:57Z"
+    confirmation_source: "CNPJ casado sem ambiguidade contra cad_cia_aberta.csv oficial da CVM (2677 companhias, sync-cvm --registry run_id=101)"

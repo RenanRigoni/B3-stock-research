@@ -50,6 +50,29 @@ class GdeltRateLimitError(RuntimeError):
     paciente sem mascarar falhas genuinas (fase1.md 67)."""
 
 
+class GdeltTimeoutError(RuntimeError):
+    """Timeout de rede -- distinto de rate limit e de erro HTTP para o
+    checkpoint de backfill poder registrar a causa real (fase1.1 12)."""
+
+
+class GdeltHttpError(RuntimeError):
+    """Erro HTTP != 429 (4xx/5xx). Nao adianta o mesmo backoff paciente do
+    rate limit -- provavelmente e um erro real de request (fase1.1 12)."""
+
+
+class GdeltParseError(RuntimeError):
+    """Resposta 200 mas corpo nao e o JSON esperado (fase1.1 12)."""
+
+
+class GdeltUnsupportedDateRangeError(RuntimeError):
+    """A API recusou a janela por estar fora da cobertura historica dela --
+    HTTP 200 com corpo texto puro ``"Invalid query start date."`` (observado
+    na Fase 1.1 tentando 2015: nao e rate limit, e a fonte dizendo que aquela
+    data nao existe pra ela). Diferente das outras falhas, retry nunca resolve
+    isso -- a janela precisa ser marcada como definitivamente sem cobertura,
+    nao reagendada (fase1.1 22: "nao fingir possuir 2015 se so ha dado depois")."""
+
+
 def _format_gdelt_datetime(value: datetime) -> str:
     return value.strftime(_GDELT_DATETIME_FORMAT)
 
@@ -100,12 +123,30 @@ def fetch_articles(
     if end is not None:
         params["enddatetime"] = _format_gdelt_datetime(end)
 
-    response = _get(
-        params,
-        requests_per_second=float(provider_cfg["requests_per_second"]),
-        timeout=float(provider_cfg["timeout_seconds"]),
-    )
-    payload = _parse_response_json(response.text)
+    try:
+        response = _get(
+            params,
+            requests_per_second=float(provider_cfg["requests_per_second"]),
+            timeout=float(provider_cfg["timeout_seconds"]),
+        )
+    except GdeltRateLimitError:
+        raise
+    except httpx.TimeoutException as exc:
+        raise GdeltTimeoutError(str(exc)) from exc
+    except httpx.HTTPStatusError as exc:
+        raise GdeltHttpError(str(exc)) from exc
+    except httpx.TransportError as exc:
+        # Esgotou os retries de erro de rede sem ser timeout puro (DNS, conexao
+        # recusada, etc.) -- mais proximo de "erro de rede" que de "timeout".
+        raise GdeltHttpError(str(exc)) from exc
+
+    if "invalid query start date" in response.text.strip().lower():
+        raise GdeltUnsupportedDateRangeError(response.text.strip()[:200])
+
+    try:
+        payload = _parse_response_json(response.text)
+    except RuntimeError as exc:
+        raise GdeltParseError(str(exc)) from exc
     articles = payload.get("articles") or []
 
     raw_path = _save_raw(query, params, response.text)

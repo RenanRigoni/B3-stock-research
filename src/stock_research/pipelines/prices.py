@@ -272,7 +272,7 @@ def _detect_data_changes(instrument_id: int, source: str, new_rows: list[dict[st
             continue
         for field_name in _TRACKED_CHANGE_FIELDS:
             old_value, new_value = old.get(field_name), row.get(field_name)
-            if _differs(old_value, new_value):
+            if _differs(old_value, new_value, relative=field_name == "adj_close"):
                 changes.append({
                     "table_name": "daily_prices",
                     "entity_key": f"{instrument_id}:{row['trade_date']}",
@@ -285,7 +285,22 @@ def _detect_data_changes(instrument_id: int, source: str, new_rows: list[dict[st
     return changes
 
 
-def _differs(old: Any, new: Any) -> bool:
+# ``adj_close`` e recalculado pelo Yahoo a cada chamada encadeando fatores de
+# proventos/splits sobre toda a serie -- ruido de ponto flutuante da ordem de
+# 1e-5 relativo aparece entre duas buscas identicas sem nenhuma correcao real
+# ter ocorrido (observado na Fase 1.1 ao rebackfillar 2010-2026: 3367/4124
+# linhas do PETR4 "mudaram" adj_close por ~0.0015% cada, todas ruido). Um
+# limiar absoluto de 1e-6 tambem escala mal entre uma acao de R$ 1 e uma de
+# R$ 100. ``close``/``volume`` sao valores brutos, sem essa recomputacao --
+# ficam com o limiar absoluto apertado de sempre.
+_ADJ_CLOSE_RELATIVE_TOLERANCE = 1e-4
+
+
+def _differs(old: Any, new: Any, *, relative: bool = False) -> bool:
     if old is None or new is None:
         return old is not new
-    return abs(float(old) - float(new)) > 1e-6
+    old_f, new_f = float(old), float(new)
+    if not relative:
+        return abs(old_f - new_f) > 1e-6
+    denom = max(abs(old_f), abs(new_f), 1e-9)
+    return abs(old_f - new_f) / denom > _ADJ_CLOSE_RELATIVE_TOLERANCE

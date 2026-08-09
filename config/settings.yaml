@@ -48,7 +48,11 @@ quality:
 
 news:
   primary_provider: gdelt
-  language: portuguese
+  # Vale e Petrobras tem cobertura internacional relevante -- restringir a
+  # portugues perde noticia real (fase1.1 18). Cada idioma vira uma query
+  # separada por janela; o idioma de fato detectado pelo GDELT fica salvo em
+  # news_articles.language independente de qual destes filtrou a busca.
+  languages: [portuguese, english]
   dedup_window_hours: 72
   title_similarity_threshold: 0.88
   relevance:

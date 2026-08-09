@@ -107,13 +107,19 @@ class TestTaxonomy:
 
 
 class TestCompanyMapping:
-    def test_nenhuma_entrada_se_autoconfirma(self):
+    def test_entrada_confirmada_tem_procedencia_registrada(self):
         # `sync-cvm --registry` pode preencher cnpj/cvm_code a partir do
-        # cadastro oficial da CVM (dado real, nao inventado) -- mas
-        # `confirmed` so vira true por edicao manual do YAML, nunca pelo
-        # pipeline (fase1.md 52 e 123: conferencia humana e obrigatoria antes
-        # de tratar um identificador oficial como definitivo).
+        # cadastro oficial da CVM (dado real, nao inventado), mas o PIPELINE
+        # nunca marca `confirmed: true` sozinho -- essa garantia e testada
+        # isoladamente em ``TestResolveMapping.test_entrada_confirmada_nunca_e_sobrescrita``
+        # (``resolve_mapping`` sempre devolve ``confirmed: False`` para
+        # entradas novas). Uma vez que a conferencia humana aconteceu e
+        # confirmou por edicao manual do YAML (fase1.md 52; fase1.1 34), a
+        # exigencia que sobra e de procedencia: toda entrada confirmada
+        # precisa registrar quando e como foi confirmada.
         for ticker, mapping in load_company_mapping()["mappings"].items():
-            assert mapping["confirmed"] is False, f"{ticker} marcado como confirmado sem revisao humana"
             if mapping["cnpj"] is not None:
                 assert mapping["resolved_by"] is not None, f"{ticker} tem CNPJ sem indicar como foi resolvido"
+            if mapping["confirmed"]:
+                assert mapping.get("confirmed_at"), f"{ticker} confirmado sem confirmed_at"
+                assert mapping.get("confirmation_source"), f"{ticker} confirmado sem confirmation_source"
