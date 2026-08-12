@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -140,6 +141,13 @@ def fetch_articles(
         # recusada, etc.) -- mais proximo de "erro de rede" que de "timeout".
         raise GdeltHttpError(str(exc)) from exc
 
+    # Preserva a resposta crua antes de qualquer transformacao (fase1.md 27),
+    # inclusive quando o parse falha logo abaixo -- sem isso, uma falha de
+    # parse perde o unico registro do corpo que causou o problema, tornando
+    # o diagnostico dependente de reproduzir a chamada (e gastar orcamento de
+    # rate limit de novo so pra investigar).
+    raw_path = _save_raw(query, params, response.text)
+
     if "invalid query start date" in response.text.strip().lower():
         raise GdeltUnsupportedDateRangeError(response.text.strip()[:200])
 
@@ -149,7 +157,6 @@ def fetch_articles(
         raise GdeltParseError(str(exc)) from exc
     articles = payload.get("articles") or []
 
-    raw_path = _save_raw(query, params, response.text)
     return RawNewsResponse(
         provider=PROVIDER,
         query=query,
@@ -160,6 +167,28 @@ def fetch_articles(
     )
 
 
+# Caracteres de controle brutos (0x00-0x1F) dentro de valores de string.
+# Confirmado na Fase 1.1: o GDELT devolve titulos raspados da web sem escapar
+# esses bytes, o que quebra json.loads mesmo com o resto do payload valido.
+# A resposta da DOC API e sempre JSON compacto (sem quebra de linha estrutural
+# entre tokens), entao remover esses bytes e seguro: eles so podem estar
+# dentro de valores de string.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f]")
+
+# Sequencias de escape invalidas (``\`` seguido de algo que nao e um escape
+# JSON valido -- "\", /, b, f, n, r, t, u). Confirmado na Fase 1.1 numa janela
+# de 2020 que sobreviveu ao reparo acima: titulo continha literalmente
+# ``high \- quality`` (o GDELT nao escapa o backslash de origem). Duplicar o
+# backslash o torna um escape valido de "\" seguido do caractere original,
+# preservando o texto em vez de inventar ou descartar conteudo.
+_INVALID_ESCAPE_RE = re.compile(r'\\(?!["\\/bfnrtu])')
+
+
+def _repair_json_text(text: str) -> str:
+    repaired = _CONTROL_CHARS_RE.sub("", text)
+    return _INVALID_ESCAPE_RE.sub(r"\\\\", repaired)
+
+
 def _parse_response_json(text: str) -> dict[str, Any]:
     """O GDELT as vezes devolve corpo vazio ou HTML de erro com status 200
     (observado esporadicamente). Nunca deixar json.JSONDecodeError propagar
@@ -168,25 +197,37 @@ def _parse_response_json(text: str) -> dict[str, Any]:
         return {"articles": []}
     try:
         parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"gdelt: resposta nao-JSON (primeiros 200 chars): {text[:200]!r}") from exc
+    except json.JSONDecodeError:
+        try:
+            parsed = json.loads(_repair_json_text(text))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"gdelt: resposta nao-JSON mesmo apos reparo (primeiros 200 chars): {text[:200]!r}") from exc
     return parsed if isinstance(parsed, dict) else {"articles": []}
 
 
 def _save_raw(query: str, params: dict[str, Any], response_text: str) -> Path:
-    """Preserva request + resposta antes de qualquer transformacao (fase1.md 27)."""
+    """Preserva request + resposta crua antes de qualquer transformacao
+    (fase1.md 27) -- inclusive quando o corpo nao e JSON valido, pra permitir
+    diagnostico sem precisar reproduzir a chamada (e gastar orcamento de rate
+    limit so pra investigar)."""
     digest = hashlib.sha256((query + json.dumps(params, sort_keys=True)).encode("utf-8")).hexdigest()[:16]
     today = date.today().isoformat()
     raw_dir = data_dir() / "raw" / "news" / "gdelt" / today
     raw_dir.mkdir(parents=True, exist_ok=True)
     path = raw_dir / f"{digest}.json"
 
+    try:
+        parsed_response = json.loads(response_text) if response_text.strip() else {"articles": []}
+    except json.JSONDecodeError:
+        parsed_response = None
+
     envelope = {
         "provider": PROVIDER,
         "endpoint": ENDPOINT,
         "params": params,
         "fetched_at": datetime.now(UTC).isoformat(),
-        "response": json.loads(response_text) if response_text.strip() else {"articles": []},
+        "response": parsed_response,
+        "response_text": response_text,
     }
     path.write_text(json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8")
     return path.relative_to(project_root())

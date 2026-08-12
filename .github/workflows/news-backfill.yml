@@ -1,0 +1,34 @@
+name: News backfill (GDELT)
+
+on:
+  schedule:
+    # A cada 6h -- so existe pra reiniciar o job caso o anterior tenha
+    # esgotado o timeout antes de terminar todos os tickers. O checkpoint no
+    # Supabase garante que retomar nunca perde trabalho nem repete chamadas
+    # ja resolvidas.
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: news-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instala o projeto
+        run: pip install -e .
+
+      - name: Backfill VALE3 -> ITUB4
+        run: python scripts/backfill_until_done.py VALE3 ITUB4 --budget-minutes 340
