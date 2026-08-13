@@ -20,6 +20,10 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      # Sem isso, o Python buferiza stdout em bloco (nao e um TTY) e o log
+      # do Actions fica minutos sem nenhuma linha nova mesmo com trabalho
+      # real acontecendo -- parece travado sem estar.
+      PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v4
 
