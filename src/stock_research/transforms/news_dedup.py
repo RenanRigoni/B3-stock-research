@@ -51,14 +51,6 @@ class _UnionFind:
             self._parent[root_b] = root_a
 
 
-def _within_window(a: datetime | None, b: datetime | None, window_hours: float) -> bool:
-    if a is None or b is None:
-        # Sem timestamp confiavel dos dois lados, nao arriscar juntar por
-        # tempo -- so titulo identico (camada 2) ja cobriria esse caso.
-        return False
-    return abs((a - b).total_seconds()) <= window_hours * 3600
-
-
 def build_clusters(
     articles: list[dict[str, Any]],
     *,
@@ -70,10 +62,20 @@ def build_clusters(
     artigo** -- artigo sozinho nao gera ``Cluster`` (fica sem
     ``duplicate_cluster_id``, e o proprio artigo e canonico implicitamente).
 
-    Comparacao e O(n^2) dentro da janela -- aceitavel para o volume de uma
-    analise por empresa (centenas de artigos, nao milhoes). Nunca compara
-    artigos fora de ``window_hours`` um do outro, mesmo que o titulo seja
-    identico (dedup_window_hours documenta a decisao: fase1.md news.dedup_window_hours).
+    Nunca compara artigos fora de ``window_hours`` um do outro, mesmo que o
+    titulo seja identico (dedup_window_hours documenta a decisao: fase1.md
+    news.dedup_window_hours). Artigo sem ``published_at_utc`` confiavel nunca
+    forma cluster aqui -- fica de fora do loop de comparacao inteiramente e
+    entra no resultado como singleton (titulo identico ja e coberto pela
+    camada 2, url/title_hash, antes desta funcao rodar).
+
+    Ordena por data e usa janela deslizante em vez de comparar todo par
+    (O(n^2) explodia pra volumes reais de producao -- PETR4 sozinho chegou a
+    166 mil artigos brutos na Fase 1.1, ~14 bilhoes de pares no O(n^2) puro,
+    inviavel). Como os artigos estao ordenados, o primeiro vizinho fora da
+    janela garante que todos os seguintes tambem estao (diferenca so cresce)
+    -- corta o loop interno ali sem mudar nenhum par que seria comparado
+    antes.
     """
     candidates = [a for a in articles if a.get("title_normalized")]
     if len(candidates) < 2:
@@ -83,10 +85,16 @@ def build_clusters(
     uf = _UnionFind(ids)
     by_id = {a["article_id"]: a for a in candidates}
 
-    for i, a in enumerate(candidates):
-        for b in candidates[i + 1 :]:
-            if not _within_window(a.get("published_at_utc"), b.get("published_at_utc"), window_hours):
-                continue
+    dated = sorted(
+        (a for a in candidates if a.get("published_at_utc") is not None),
+        key=lambda a: a["published_at_utc"],
+    )
+    window_seconds = window_hours * 3600
+
+    for i, a in enumerate(dated):
+        for b in dated[i + 1 :]:
+            if (b["published_at_utc"] - a["published_at_utc"]).total_seconds() > window_seconds:
+                break
             if a["title_hash"] and a["title_hash"] == b["title_hash"]:
                 uf.union(a["article_id"], b["article_id"])
                 continue
