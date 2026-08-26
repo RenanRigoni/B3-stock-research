@@ -52,14 +52,40 @@ def analyze_news(ticker: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+_FETCH_PAGE_SIZE = 20_000
+
+
+def _fetch_paginated(query: str, instrument_id: int) -> list[dict[str, Any]]:
+    """``query`` precisa filtrar por ``a.article_id > %s`` e ``instrument_id
+    = %s`` (nessa ordem de parametro) e ordenar por ``a.article_id``. Pagina
+    por keyset em vez de trazer o ticker inteiro numa chamada -- PETR4 tem
+    166 mil artigos brutos, e uma unica consulta desse tamanho batia no
+    statement_timeout do banco (Fase 1.1, tier Nano). Keyset em vez de
+    OFFSET: usa o indice do article_id direto, nao degrada com a paginacao
+    avancando (OFFSET teria que reescanear as paginas anteriores toda vez)."""
+    rows: list[dict[str, Any]] = []
+    last_id = 0
+    while True:
+        chunk = fetch_all(query, [instrument_id, last_id, _FETCH_PAGE_SIZE])
+        if not chunk:
+            break
+        rows.extend(chunk)
+        last_id = chunk[-1]["article_id"]
+        if len(chunk) < _FETCH_PAGE_SIZE:
+            break
+    return rows
+
+
 def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
     settings = load_settings()["news"]
-    articles = fetch_all(
+    articles = _fetch_paginated(
         "select a.article_id, a.title, a.title_normalized, a.title_hash, a.published_at_utc "
         "from public.news_articles a "
         "join public.news_company_links l using (article_id) "
-        "where l.instrument_id = %s",
-        [instrument_id],
+        "where l.instrument_id = %s and a.article_id > %s "
+        "order by a.article_id "
+        "limit %s",
+        instrument_id,
     )
     if not articles:
         return {"articles_considered": 0, "clusters": 0, "clustered": 0}
@@ -201,11 +227,13 @@ def _rescore_relevance(instrument_id: int) -> dict[str, int]:
     )
     alias_pairs = [(r["alias"], r["is_strong"]) for r in aliases]
 
-    links = fetch_all(
+    links = _fetch_paginated(
         "select l.article_id, a.title, a.domain "
         "from public.news_company_links l join public.news_articles a using (article_id) "
-        "where l.instrument_id = %s",
-        [instrument_id],
+        "where l.instrument_id = %s and l.article_id > %s "
+        "order by l.article_id "
+        "limit %s",
+        instrument_id,
     )
     if not links:
         return {"rescored": 0}
