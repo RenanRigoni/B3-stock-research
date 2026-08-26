@@ -92,8 +92,7 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
     # duplicate_cluster_id obsoleto -- sem isso, so as atribuicoes NOVAS
     # seriam corrigidas, nunca as removidas (idempotencia pelo estado final,
     # nao so pela ausencia de duplicata).
-    considered_ids = [a["article_id"] for a in articles]
-    _reset_cluster_assignments(considered_ids)
+    _reset_cluster_assignments(instrument_id)
 
     # upsert por canonical_article_id (chave natural -- ver migration
     # news_clusters_canonical_article_key): reexecutar atualiza o mesmo
@@ -114,14 +113,17 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
     # ON CONFLICT DO UPDATE (mesma causa-raiz do bug ja corrigido em
     # pipelines/fundamentals.py:_sync_instrument_identifiers -- a linha aqui
     # sempre ja existe, foi lida do proprio banco duas linhas acima).
-    for cluster in clusters:
-        cluster_id = cluster_ids[cluster.canonical_article_id]
-        for article_id in cluster.article_ids:
-            execute(
-                "update public.news_articles set duplicate_cluster_id = %s, "
-                "is_cluster_canonical = %s where article_id = %s",
-                [cluster_id, article_id == cluster.canonical_article_id, article_id],
-            )
+    #
+    # Em lote via UPDATE ... FROM (VALUES ...): um UPDATE por artigo virou
+    # gargalo real na Fase 1.1 (milhares de round-trips HTTP pro backend REST
+    # so pra clusters de republicacao de PETR4/VALE3/ITUB4 -- minutos de
+    # latencia de rede pura por uma operacao que e uma unica instrucao SQL).
+    assignments = [
+        (article_id, cluster_ids[cluster.canonical_article_id], article_id == cluster.canonical_article_id)
+        for cluster in clusters
+        for article_id in cluster.article_ids
+    ]
+    _apply_cluster_assignments(assignments)
 
     return {
         "articles_considered": len(articles),
@@ -130,14 +132,37 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
     }
 
 
-def _reset_cluster_assignments(article_ids: list[int]) -> None:
-    if not article_ids:
-        return
-    placeholders = ", ".join(["%s"] * len(article_ids))
+_UPDATE_BATCH_SIZE = 1000
+
+
+def _apply_cluster_assignments(assignments: list[tuple[int, int, bool]]) -> None:
+    """``assignments``: ``(article_id, cluster_id, is_canonical)``. Um UPDATE
+    por lote via ``VALUES``, nao um por linha (ver comentario no chamador)."""
+    for start in range(0, len(assignments), _UPDATE_BATCH_SIZE):
+        chunk = assignments[start : start + _UPDATE_BATCH_SIZE]
+        values_sql = ", ".join("(%s::bigint, %s::bigint, %s::boolean)" for _ in chunk)
+        params = [value for row in chunk for value in row]
+        execute(
+            "update public.news_articles as t "
+            "set duplicate_cluster_id = v.cluster_id, is_cluster_canonical = v.is_canonical "
+            f"from (values {values_sql}) as v(article_id, cluster_id, is_canonical) "
+            "where t.article_id = v.article_id",
+            params,
+        )
+
+
+def _reset_cluster_assignments(instrument_id: int) -> None:
+    # Subquery em vez de literal `IN (id1, id2, ...)`: uma lista com dezenas
+    # de milhares de IDs (PETR4 tem 166 mil artigos) estourava o parser SQL
+    # do Postgres via exec_sql (500 Internal Server Error, provavel limite de
+    # profundidade de recursao pra expressoes IN muito longas). A mesma
+    # condicao do SELECT que populou `articles` acima, sem materializar IDs.
     execute(
-        f"update public.news_articles set duplicate_cluster_id = null, is_cluster_canonical = false "
-        f"where article_id in ({placeholders})",
-        article_ids,
+        "update public.news_articles set duplicate_cluster_id = null, is_cluster_canonical = false "
+        "where article_id in ("
+        "  select article_id from public.news_company_links where instrument_id = %s"
+        ")",
+        [instrument_id],
     )
 
 
