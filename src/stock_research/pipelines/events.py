@@ -25,6 +25,7 @@ from stock_research.config import load_settings
 from stock_research.db import (
     execute,
     fetch_all,
+    fetch_all_paginated,
     finish_run,
     start_run,
     upsert_many,
@@ -157,7 +158,7 @@ def _event_candidates(instrument_id: int, min_relevance: float) -> list[dict[str
     """Um candidato por cluster (canonico representa o grupo) + artigos
     relevantes fora de qualquer cluster. ``source_id`` e a chave natural do
     evento: ``cluster:<id>`` ou ``article:<id>``, estavel entre execucoes."""
-    rows = fetch_all(
+    rows = fetch_all_paginated(
         "select a.article_id, a.title, a.published_at_utc, a.time_precision, "
         "       a.duplicate_cluster_id, "
         "       n.category, n.sentiment, "
@@ -165,7 +166,9 @@ def _event_candidates(instrument_id: int, min_relevance: float) -> list[dict[str
         "from public.news_articles a "
         "join public.news_company_links l using (article_id) "
         "left join public.news_analysis n on n.article_id = a.article_id and n.instrument_id = l.instrument_id "
-        "where l.instrument_id = %s and l.relevance_score >= %s",
+        "where l.instrument_id = %s and l.relevance_score >= %s and a.article_id > %s "
+        "order by a.article_id "
+        "limit %s",
         [instrument_id, min_relevance],
     )
     if not rows:
