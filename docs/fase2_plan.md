@@ -211,21 +211,28 @@ Metodologia `quality_bank_v1` ainda não tem dados suficientes hoje (ver §13 �
 não resolvido). Enquanto isso: **`score_status = 'incomplete'`, nunca um score artificial
 construído sobre campos `sector_inadequate`.** Isso é regra dura, não sugestão.
 
-## 10. DCF — só não-financeiras — CÓDIGO COMPLETO, MIGRATION PENDENTE (2026-08-27)
+## 10. DCF — CONCLUÍDO E APLICADO (2026-08-27)
 
 > **Andamento**: módulos puros (`analytics/beta.py`, `analytics/wacc.py`,
-> `analytics/dcf.py`, `transforms/risk_free.py`) + fonte `sources/macro/tesouro.py` +
-> orquestração `pipelines/valuation_dcf.py` + CLI `compute-dcf`. Configs:
-> `config/wacc_v1.yaml`, `config/equity_risk_premium_snapshots.yaml` (ERP Damodaran
-> jan/2026 curado à mão — §16.4). Migration `20260827000006_dcf_and_macro.sql`
-> (`risk_free_assumptions`, `equity_risk_premium_assumptions`, `wacc_assumptions`,
-> `valuation_snapshots`) **NÃO aplicada** — `compute-dcf` só grava depois disso.
-> Sanity check com dado real (sem gravar): risk-free 12,4%, beta PETR4 0,97, WACC ~17%,
-> DCF PETR4 fair R$19-35 vs R$41; VALE3 FCFF 2025 negativo → `not_applicable`; ITUB4
-> banco → pulado. Ver §34.
+> `analytics/dcf.py`, `analytics/residual_income.py`, `analytics/ddm.py`,
+> `transforms/risk_free.py`) + fonte `sources/macro/tesouro.py` + orquestração
+> `pipelines/valuation_dcf.py` + CLI `compute-dcf`. Configs: `config/wacc_v1.yaml`,
+> `config/equity_risk_premium_snapshots.yaml` (ERP Damodaran jan/2026 curado à mão — §16.4).
+> Migration `20260827000006_dcf_and_macro.sql` **aplicada**; `compute-dcf` **rodado**,
+> 4 tabelas populadas, 12 `valuation_snapshots`.
+>
+> **Resultado (as_of 2026-08-27)**: PETR4 WACC 15,7% / FCFF R$100,7 bi (média 3a) /
+> fair base **R$45,44** / MoS **+9%**. VALE3 WACC 16,3% / FCFF R$20,8 bi / fair
+> **R$24,92** / MoS **−215%** (mercado precifica recuperação do minério que não está no
+> trailing). ITUB4 (banco) coe 20% → Residual Income base **R$21,06**, DDM **R$20,50**,
+> MoS ≈ −90% (ancorado no valor patrimonial, ~R$22; preço R$39 ≈ 1,75× book). Ver §34.
 >
 > **FCFF V1 = média de 3 anos de `NOPAT + D&A + capex`** (capex negativo), não
 > `OCF + capex` (que é mais FCFE). Ignora ΔWC — refinamento futuro documentado.
+> Bancos: FCFF não se aplica → Residual Income + DDM (`_run_bank`).
+>
+> **Pendência residual**: registrar `20260827000006` no ledger
+> `supabase_migrations.schema_migrations` (o `exec_sql` RPC não tem permissão nesse schema).
 
 **FCFF DCF**, arquitetura: 5 anos de projeção explícita + Terminal Value (Gordon Growth
 como preferencial). **WACC por empresa, nunca uma taxa fixa global.**
@@ -1548,3 +1555,15 @@ implementação que usasse o yield BRUTO como risk-free **e** somasse o `country
 inteiro no cost of equity infla o WACC em > 2 p.p. — o teste pega. A implementação correta
 subtrai o `brazil_default_spread` do risk-free (uma vez) e soma o `country_risk_premium`
 (uma vez, aditivo), canais distintos (§21.6).
+
+### 34.6 Dois bugs pegos ao aplicar (2026-08-27)
+
+1. **JSON**: o snapshot de ERP (com campos `date`/`datetime` do YAML) não serializava
+   dentro de `valuation_snapshots.assumptions`. `_j()` virou recursivo (dict/list).
+2. **Cost of debt abaixo do soberano**: `pretax_cost_of_debt` (despesa financeira /
+   dívida bruta) da PETR4 e VALE3 deu abaixo de 4% → limitado ao piso ABSOLUTO do config
+   (4%), que fica **abaixo do risk-free** (12,4%) → `company_credit_spread` NEGATIVO e
+   WACC subestimado (PETR4 saiu 13,2%). Corrigido: o piso do `pretax_cost_of_debt` passa a
+   ser o **risk-free** (empresa não capta abaixo do governo); o piso do config só vale
+   quando não há risk-free. Depois: PETR4 WACC 15,7%, VALE3 16,3%, `company_credit_spread`
+   = +0,0% (a proxy de despesa financeira é fraca — limitação já registrada em §34.4).

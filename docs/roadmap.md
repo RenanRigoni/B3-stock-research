@@ -461,15 +461,18 @@ Além dos 6 blocos acima, na mesma sessão:
 | § | Bloco | Migration | CLI | Status |
 |---|---|---|---|---|
 | 5 | Caminho **TTM** para métricas e múltiplos | (nenhuma nova) | `compute-multiples --basis ttm` | **concluído** — `analytics/ttm.py`; TTM = soma de 4 trimestres isolados, `available_from` do ponto TTM = o mais recente dos 4 (look-ahead) |
-| 10-12, 21 | **DCF FCFF** + WACC + risk-free + ERP | `20260827000006` **(não aplicada)** | `compute-dcf` | **código completo, migration pendente** — módulos puros testados; sanity check com dado real OK; grava só depois da migration |
+| 10-12, 21 | **DCF FCFF + RI + DDM** + WACC + risk-free + ERP | `20260827000006` (aplicada) | `compute-dcf` | **CONCLUÍDO** -- PETR4 fair R$45 (MoS +9%), VALE3 R$25 (-215%), ITUB4 RI R$21 — módulos puros testados; sanity check com dado real OK; grava só depois da migration |
 
 Fontes externas validadas contra o real: Tesouro Prefixado (`PrecoTaxaTesouroDireto.csv`),
 Damodaran ERP (`ctryprem.xlsx` → config curado). Ver `fase2_plan.md` §34.
 
-**Pendências desta sessão (precisam do usuário):**
+Migration `20260827000006` aplicada e `compute-dcf` rodado — 4 tabelas populadas.
 
-1. Aplicar `supabase/migrations/20260827000006_dcf_and_macro.sql` no SQL editor + registrar
-   no ledger. Depois: `stock-research compute-dcf`.
+**Pendências:**
+
+1. Registrar `20260827000006` no ledger `supabase_migrations.schema_migrations` (o
+   `exec_sql` RPC não tem permissão nesse schema — precisa do SQL editor).
 2. Fase 2 ainda aberta: `quality_bank_v1` (`incomplete` por desenho até haver fonte de
    NIM/eficiência/Basileia), refino do `CAPEX_DESC` da VALE3 (Fase 1) para destravar
-   `free_cash_flow` TTM pós-2018.
+   `free_cash_flow` TTM pós-2018 (causa exata em `fase2_plan.md` §34.3). Refinos do DCF:
+   ΔWC no FCFF, isolar juros puros no cost of debt, `terminal_growth` por empresa.
