@@ -122,7 +122,7 @@ def _fcff_avg(instrument_id: int, as_of: date) -> tuple[float | None, list[int],
 
 
 def _financial_expense_over_debt(
-    instrument_id: int, as_of: date, gross_debt: float | None
+    instrument_id: int, as_of: date, gross_debt: float | None, risk_free_rate: float | None
 ) -> tuple[float | None, str]:
     cfg = _wacc_config()["cost_of_debt"]
     if not gross_debt or gross_debt <= 0:
@@ -139,8 +139,16 @@ def _financial_expense_over_debt(
     total, _docs = _sum_per_branch(facts, "DRE", _FIN_EXPENSE_DESC, _FIN_EXPENSE_BRANCH)
     if total is None:
         return None, "conta 'Despesas Financeiras' não encontrada"
-    rate = abs(float(total)) / gross_debt
-    rate = max(float(cfg["floor"]), min(float(cfg["cap"]), rate))
+    raw = abs(float(total)) / gross_debt
+    # Piso econômico: uma empresa não capta abaixo do soberano. O piso do config
+    # (4%) só vale quando não há risk-free; havendo, o piso é o risk-free.
+    floor = risk_free_rate if risk_free_rate is not None else float(cfg["floor"])
+    rate = max(floor, min(float(cfg["cap"]), raw))
+    if rate != raw:
+        return rate, (
+            f"despesa financeira / dívida bruta = {raw:.4f}, ajustado para {rate:.4f} "
+            f"(piso = {'risk-free' if risk_free_rate is not None else 'config'})"
+        )
     return rate, f"despesa financeira / dívida bruta = {rate:.4f} (com piso/teto)"
 
 
@@ -242,7 +250,9 @@ def _run_one(
     market_cap = (
         float(mcap_row["market_cap"]) if mcap_row and mcap_row["market_cap"] is not None else None
     )
-    pretax_cod, cod_reason = _financial_expense_over_debt(inst["instrument_id"], as_of, gross_debt)
+    pretax_cod, cod_reason = _financial_expense_over_debt(
+        inst["instrument_id"], as_of, gross_debt, rf.get("risk_free_rate")
+    )
     fcff, fcff_years, fcff_reason = _fcff_avg(inst["instrument_id"], as_of)
 
     wacc = compute_wacc(
@@ -581,7 +591,7 @@ def _store_snapshots(
                         "dcf": {k: _j(v) for k, v in res.items()},
                         "wacc": {k: _j(v) for k, v in (wacc or {}).items()},
                         "risk_free": {k: _j(v) for k, v in rf.items()},
-                        "erp": erp,
+                        "erp": _j(erp),
                     },
                     ensure_ascii=False,
                 ),
@@ -619,6 +629,10 @@ def _store_snapshots(
 def _j(v: Any) -> Any:
     if isinstance(v, date):
         return v.isoformat()
+    if isinstance(v, dict):
+        return {str(k): _j(x) for k, x in v.items()}
+    if isinstance(v, list | tuple):
+        return [_j(x) for x in v]
     if isinstance(v, float | int | str | bool) or v is None:
         return v
     return str(v)
