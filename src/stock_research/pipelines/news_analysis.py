@@ -89,12 +89,14 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
     )
     if not articles:
         return {"articles_considered": 0, "clusters": 0, "clustered": 0}
+    logger.info("analyze-news: %d artigos buscados, iniciando clustering", len(articles))
 
     clusters = build_clusters(
         articles,
         similarity_threshold=float(settings["title_similarity_threshold"]),
         window_hours=float(settings["dedup_window_hours"]),
     )
+    logger.info("analyze-news: clustering concluido, %d clusters", len(clusters))
     if not clusters:
         return {"articles_considered": len(articles), "clusters": 0, "clustered": 0}
 
@@ -119,6 +121,7 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
     # seriam corrigidas, nunca as removidas (idempotencia pelo estado final,
     # nao so pela ausencia de duplicata).
     _reset_cluster_assignments(instrument_id)
+    logger.info("analyze-news: reset de atribuicoes concluido")
 
     # upsert por canonical_article_id (chave natural -- ver migration
     # news_clusters_canonical_article_key): reexecutar atualiza o mesmo
@@ -131,6 +134,7 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
             "first_seen", "last_seen", "dedup_method", "dedup_version",
         ],
     )
+    logger.info("analyze-news: %d cluster(s) gravado(s) em news_clusters", len(cluster_rows))
     cluster_ids = _cluster_ids_by_canonical([c.canonical_article_id for c in clusters])
 
     # UPDATE puro, nao upsert: article_id e GENERATED ALWAYS AS IDENTITY --
@@ -149,7 +153,9 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
         for cluster in clusters
         for article_id in cluster.article_ids
     ]
+    logger.info("analyze-news: aplicando %d atribuicoes de cluster em lotes de %d", len(assignments), _UPDATE_BATCH_SIZE)
     _apply_cluster_assignments(assignments)
+    logger.info("analyze-news: atribuicoes de cluster aplicadas")
 
     return {
         "articles_considered": len(articles),
@@ -164,7 +170,8 @@ _UPDATE_BATCH_SIZE = 1000
 def _apply_cluster_assignments(assignments: list[tuple[int, int, bool]]) -> None:
     """``assignments``: ``(article_id, cluster_id, is_canonical)``. Um UPDATE
     por lote via ``VALUES``, nao um por linha (ver comentario no chamador)."""
-    for start in range(0, len(assignments), _UPDATE_BATCH_SIZE):
+    total_batches = (len(assignments) + _UPDATE_BATCH_SIZE - 1) // _UPDATE_BATCH_SIZE
+    for batch_num, start in enumerate(range(0, len(assignments), _UPDATE_BATCH_SIZE), start=1):
         chunk = assignments[start : start + _UPDATE_BATCH_SIZE]
         values_sql = ", ".join("(%s::bigint, %s::bigint, %s::boolean)" for _ in chunk)
         params = [value for row in chunk for value in row]
@@ -175,6 +182,7 @@ def _apply_cluster_assignments(assignments: list[tuple[int, int, bool]]) -> None
             "where t.article_id = v.article_id",
             params,
         )
+        logger.info("analyze-news: lote de atribuicao %d/%d aplicado", batch_num, total_batches)
 
 
 def _reset_cluster_assignments(instrument_id: int) -> None:
@@ -237,6 +245,7 @@ def _rescore_relevance(instrument_id: int) -> dict[str, int]:
     )
     if not links:
         return {"rescored": 0}
+    logger.info("analyze-news: %d link(s) buscados, recalculando relevancia", len(links))
 
     updates = []
     for link in links:
@@ -252,10 +261,12 @@ def _rescore_relevance(instrument_id: int) -> dict[str, int]:
                 "review_status": "auto" if result.band != "low" else "pending_review",
             }
         )
+    logger.info("analyze-news: relevancia recalculada, gravando %d atualizacao(oes)", len(updates))
     stats = upsert_many(
         "news_company_links", updates, conflict_columns=["article_id", "instrument_id"],
         update_columns=["match_method", "relevance_score", "match_terms", "is_primary_company", "review_status"],
     )
+    logger.info("analyze-news: relevancia gravada")
     return {"rescored": stats["total"]}
 
 
