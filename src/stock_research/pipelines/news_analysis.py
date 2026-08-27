@@ -79,7 +79,7 @@ def _fetch_paginated(query: str, instrument_id: int) -> list[dict[str, Any]]:
 def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
     settings = load_settings()["news"]
     articles = _fetch_paginated(
-        "select a.article_id, a.title, a.title_normalized, a.title_hash, a.published_at_utc "
+        "select a.article_id, a.title, a.title_normalized, a.title_hash, a.published_at_utc, a.domain "
         "from public.news_articles a "
         "join public.news_company_links l using (article_id) "
         "where l.instrument_id = %s and a.article_id > %s "
@@ -90,6 +90,7 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
     if not articles:
         return {"articles_considered": 0, "clusters": 0, "clustered": 0}
     logger.info("analyze-news: %d artigos buscados, iniciando clustering", len(articles))
+    domain_by_article_id = {a["article_id"]: a.get("domain") for a in articles}
 
     clusters = build_clusters(
         articles,
@@ -116,7 +117,7 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
                 "canonical_article_id": c.canonical_article_id,
                 "representative_title": c.representative_title,
                 "article_count": len(c.article_ids),
-                "unique_domains": _count_unique_domains(c.article_ids),
+                "unique_domains": len({domain_by_article_id[aid] for aid in c.article_ids if domain_by_article_id.get(aid)}),
                 "first_seen": c.first_seen,
                 "last_seen": c.last_seen,
                 "dedup_method": "title_hash+rapidfuzz",
@@ -197,17 +198,6 @@ def _cluster_ids_by_canonical(canonical_article_ids: list[int]) -> dict[int, int
         canonical_article_ids,
     )
     return {r["canonical_article_id"]: r["cluster_id"] for r in rows}
-
-
-def _count_unique_domains(article_ids: list[int]) -> int:
-    if not article_ids:
-        return 0
-    placeholders = ", ".join(["%s"] * len(article_ids))
-    rows = fetch_all(
-        f"select count(distinct domain) as n from public.news_articles where article_id in ({placeholders})",
-        article_ids,
-    )
-    return int(rows[0]["n"]) if rows else 0
 
 
 # ---------------------------------------------------------------------------
