@@ -70,6 +70,15 @@ CAPEX_DESC = [
     "Aquisição de Imobilizado",
     "Aquisição de Ativo Imobilizado",
     "Pagamento por Aquisição de Ativos Imobilizados",
+    "Adilções ao imobilizado",  # typo da própria CVM (VALE3 2012) -- inequivocamente capex
+]
+# Linha COMBINADA (imobilizado + participações societárias) -- a VALE3 usa no Q3
+# de 2018-2025. NÃO é capex puro; só entra como fallback quando nenhuma linha de
+# imobilizado separada existe, e SEMPRE com quality_flag='estimated' (fase2_plan
+# §35). Nunca dá falsa precisão a FCF/DCF.
+CAPEX_COMBINED_DESC = [
+    "Adições ao Imobilizado e investimentos",
+    "Adições ao Imobilizado e Investimentos",
 ]
 CAPEX_BRANCH = "6.02"
 
@@ -98,14 +107,23 @@ def _scaled(fact: dict[str, Any] | None) -> Decimal | None:
     return Decimal(fact["value"]) * Decimal(fact.get("scale") or 1)
 
 
-def _match_one(facts: list[dict[str, Any]], statement_type: str, descriptions: list[str]) -> dict[str, Any] | None:
+def _match_one(
+    facts: list[dict[str, Any]], statement_type: str, descriptions: list[str]
+) -> dict[str, Any] | None:
     targets = {_norm(d) for d in descriptions}
-    candidates = [f for f in facts if f["statement_type"] == statement_type and _norm(f["account_description"]) in targets]
+    candidates = [
+        f
+        for f in facts
+        if f["statement_type"] == statement_type and _norm(f["account_description"]) in targets
+    ]
     return min(candidates, key=lambda f: _depth(f["account_code"])) if candidates else None
 
 
 def _sum_per_branch(
-    facts: list[dict[str, Any]], statement_type: str, descriptions: list[str], branches: tuple[str, ...]
+    facts: list[dict[str, Any]],
+    statement_type: str,
+    descriptions: list[str],
+    branches: tuple[str, ...],
 ) -> tuple[Decimal | None, list[int]]:
     """Soma o match mais raso de cada ramo (``2.01``, ``2.02``, ...) -- evita
     contar duas vezes quando a mesma descricao se repete num nivel mais fundo
@@ -115,7 +133,8 @@ def _sum_per_branch(
     doc_ids: list[int] = []
     for branch in branches:
         candidates = [
-            f for f in facts
+            f
+            for f in facts
             if f["statement_type"] == statement_type
             and f["account_code"].startswith(branch)
             and _norm(f["account_description"]) in targets
@@ -138,7 +157,8 @@ def _sum_distinct_matches(
     pela mesma razao de ``_sum_per_branch``."""
     targets = {_norm(d) for d in descriptions}
     matches = [
-        f for f in facts
+        f
+        for f in facts
         if f["statement_type"] == statement_type
         and f["account_code"].startswith(branch_prefix)
         and _norm(f["account_description"]) in targets
@@ -193,18 +213,35 @@ _RATIO_METRIC_NAMES = {"net_margin", "roe", "revenue_growth_yoy", "net_income_gr
 
 
 def _balance_metrics(
-    current: list[dict[str, Any]], *, instrument_id: int, reference_date: date,
-    available_from: Any, financial_company: bool, run_id: int | None,
+    current: list[dict[str, Any]],
+    *,
+    instrument_id: int,
+    reference_date: date,
+    available_from: Any,
+    financial_company: bool,
+    run_id: int | None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
-    def emit(name: str, value: Any, doc_ids: list[int], flag: str = "ok", reason: str | None = None) -> None:
-        rows.append({
-            "instrument_id": instrument_id, "reference_date": reference_date, "available_from": available_from,
-            "period_type": "point_in_time", "metric_name": name, "metric_value": value, "unit": "BRL",
-            "calculation_version": CALCULATION_VERSION, "source_document_ids": sorted(set(doc_ids)) or None,
-            "quality_flag": flag, "quality_reason": reason, "run_id": run_id,
-        })
+    def emit(
+        name: str, value: Any, doc_ids: list[int], flag: str = "ok", reason: str | None = None
+    ) -> None:
+        rows.append(
+            {
+                "instrument_id": instrument_id,
+                "reference_date": reference_date,
+                "available_from": available_from,
+                "period_type": "point_in_time",
+                "metric_name": name,
+                "metric_value": value,
+                "unit": "BRL",
+                "calculation_version": CALCULATION_VERSION,
+                "source_document_ids": sorted(set(doc_ids)) or None,
+                "quality_flag": flag,
+                "quality_reason": reason,
+                "run_id": run_id,
+            }
+        )
 
     assets_f = _match_one(current, "BPA", ASSETS_DESC)
     equity_f = _match_one(current, "BPP", EQUITY_DESC)
@@ -215,26 +252,68 @@ def _balance_metrics(
     equity = _scaled(equity_f) if equity_f else None
     cash = _scaled(cash_f) if cash_f else None
 
-    emit("assets", assets, _docs(assets_f), *_ok_or_missing(assets, "conta 'Ativo Total' nao encontrada no BPA"))
-    emit("equity", equity, _docs(equity_f), *_ok_or_missing(equity, "conta 'Patrimonio Liquido' nao encontrada no BPP"))
-    emit("cash", cash, _docs(cash_f), *_ok_or_missing(cash, "conta 'Caixa e Equivalentes de Caixa' nao encontrada no BPA"))
+    emit(
+        "assets",
+        assets,
+        _docs(assets_f),
+        *_ok_or_missing(assets, "conta 'Ativo Total' nao encontrada no BPA"),
+    )
+    emit(
+        "equity",
+        equity,
+        _docs(equity_f),
+        *_ok_or_missing(equity, "conta 'Patrimonio Liquido' nao encontrada no BPP"),
+    )
+    emit(
+        "cash",
+        cash,
+        _docs(cash_f),
+        *_ok_or_missing(cash, "conta 'Caixa e Equivalentes de Caixa' nao encontrada no BPA"),
+    )
 
     if assets is not None and equity is not None:
-        emit("liabilities", assets - equity, _docs(assets_f) + _docs(equity_f), "ok",
-             "derivado: Ativo Total - Patrimonio Liquido (identidade contabil do balanco)")
+        emit(
+            "liabilities",
+            assets - equity,
+            _docs(assets_f) + _docs(equity_f),
+            "ok",
+            "derivado: Ativo Total - Patrimonio Liquido (identidade contabil do balanco)",
+        )
     else:
         emit("liabilities", None, [], "missing_input", "requer assets e equity")
 
     if financial_company:
-        emit("gross_debt", None, [], "sector_inadequate",
-             "instituicao financeira: estrutura de funding nao equivale a 'Emprestimos e Financiamentos' (fase1.md 50)")
-        emit("net_debt", None, [], "sector_inadequate", "instituicao financeira: net_debt nao se aplica (fase1.md 50)")
+        emit(
+            "gross_debt",
+            None,
+            [],
+            "sector_inadequate",
+            "instituicao financeira: estrutura de funding nao equivale a 'Emprestimos e Financiamentos' (fase1.md 50)",
+        )
+        emit(
+            "net_debt",
+            None,
+            [],
+            "sector_inadequate",
+            "instituicao financeira: net_debt nao se aplica (fase1.md 50)",
+        )
     else:
-        emit("gross_debt", debt_total, debt_doc_ids,
-             *_ok_or_missing(debt_total, "conta 'Emprestimos e Financiamentos' nao encontrada no BPP"))
+        emit(
+            "gross_debt",
+            debt_total,
+            debt_doc_ids,
+            *_ok_or_missing(
+                debt_total, "conta 'Emprestimos e Financiamentos' nao encontrada no BPP"
+            ),
+        )
         if debt_total is not None and cash is not None:
-            emit("net_debt", debt_total - cash, sorted(set(debt_doc_ids) | set(_docs(cash_f))), "ok",
-                 "derivado: gross_debt - cash")
+            emit(
+                "net_debt",
+                debt_total - cash,
+                sorted(set(debt_doc_ids) | set(_docs(cash_f))),
+                "ok",
+                "derivado: gross_debt - cash",
+            )
         else:
             emit("net_debt", None, [], "missing_input", "requer gross_debt e cash")
 
@@ -248,62 +327,152 @@ def _balance_metrics(
 
 
 def _flow_metrics_direct(
-    current_slice: list[dict[str, Any]], previous_slice: list[dict[str, Any]], *,
-    instrument_id: int, reference_date: date, available_from: Any, period_type: str,
-    financial_company: bool, run_id: int | None,
+    current_slice: list[dict[str, Any]],
+    previous_slice: list[dict[str, Any]],
+    *,
+    instrument_id: int,
+    reference_date: date,
+    available_from: Any,
+    period_type: str,
+    financial_company: bool,
+    run_id: int | None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
-    def emit(name: str, value: Any, doc_ids: list[int], flag: str = "ok", reason: str | None = None) -> None:
-        rows.append({
-            "instrument_id": instrument_id, "reference_date": reference_date, "available_from": available_from,
-            "period_type": period_type, "metric_name": name, "metric_value": value,
-            "unit": "ratio" if name in _RATIO_METRIC_NAMES else "BRL",
-            "calculation_version": CALCULATION_VERSION, "source_document_ids": sorted(set(doc_ids)) or None,
-            "quality_flag": flag, "quality_reason": reason, "run_id": run_id,
-        })
+    def emit(
+        name: str, value: Any, doc_ids: list[int], flag: str = "ok", reason: str | None = None
+    ) -> None:
+        rows.append(
+            {
+                "instrument_id": instrument_id,
+                "reference_date": reference_date,
+                "available_from": available_from,
+                "period_type": period_type,
+                "metric_name": name,
+                "metric_value": value,
+                "unit": "ratio" if name in _RATIO_METRIC_NAMES else "BRL",
+                "calculation_version": CALCULATION_VERSION,
+                "source_document_ids": sorted(set(doc_ids)) or None,
+                "quality_flag": flag,
+                "quality_reason": reason,
+                "run_id": run_id,
+            }
+        )
 
     revenue_desc = REVENUE_DESC_FIN if financial_company else REVENUE_DESC_NONFIN
     revenue_f = _match_one(current_slice, "DRE", revenue_desc)
     net_income_f = _match_one(current_slice, "DRE", NET_INCOME_DESC)
     ebit_f = _match_one(current_slice, "DRE", EBIT_DESC)
-    ocf_f = _match_one(current_slice, "DFC_MI", OCF_DESC) or _match_one(current_slice, "DFC_MD", OCF_DESC)
-    capex_total, capex_doc_ids = _sum_distinct_matches(current_slice, "DFC_MI", CAPEX_BRANCH, CAPEX_DESC)
+    ocf_f = _match_one(current_slice, "DFC_MI", OCF_DESC) or _match_one(
+        current_slice, "DFC_MD", OCF_DESC
+    )
+    capex_total, capex_doc_ids = _sum_distinct_matches(
+        current_slice, "DFC_MI", CAPEX_BRANCH, CAPEX_DESC
+    )
     if capex_total is None:
-        capex_total, capex_doc_ids = _sum_distinct_matches(current_slice, "DFC_MD", CAPEX_BRANCH, CAPEX_DESC)
+        capex_total, capex_doc_ids = _sum_distinct_matches(
+            current_slice, "DFC_MD", CAPEX_BRANCH, CAPEX_DESC
+        )
+    capex_combined = False
+    if capex_total is None:
+        # Fallback: linha combinada imobilizado + participacoes (VALE3 Q3). Proxy
+        # -- capex fica levemente inflado -> quality_flag='estimated' (fase2_plan §35).
+        for stmt in ("DFC_MI", "DFC_MD"):
+            capex_total, capex_doc_ids = _sum_distinct_matches(
+                current_slice, stmt, CAPEX_BRANCH, CAPEX_COMBINED_DESC
+            )
+            if capex_total is not None:
+                capex_combined = True
+                break
 
     revenue = _scaled(revenue_f) if revenue_f else None
     net_income = _scaled(net_income_f) if net_income_f else None
     ebit = _scaled(ebit_f) if ebit_f else None
     ocf = _scaled(ocf_f) if ocf_f else None
 
-    emit("revenue", revenue, _docs(revenue_f), *_ok_or_missing(revenue, "conta de receita nao encontrada no DRE"))
-    emit("net_income", net_income, _docs(net_income_f),
-         *_ok_or_missing(net_income, "conta 'Lucro/Prejuizo do Periodo' nao encontrada no DRE"))
+    emit(
+        "revenue",
+        revenue,
+        _docs(revenue_f),
+        *_ok_or_missing(revenue, "conta de receita nao encontrada no DRE"),
+    )
+    emit(
+        "net_income",
+        net_income,
+        _docs(net_income_f),
+        *_ok_or_missing(net_income, "conta 'Lucro/Prejuizo do Periodo' nao encontrada no DRE"),
+    )
 
     if financial_company:
-        emit("ebit", None, [], "sector_inadequate",
-             "instituicao financeira: 'resultado antes do resultado financeiro' nao se aplica -- "
-             "o resultado financeiro E o negocio principal (fase1.md 50)")
+        emit(
+            "ebit",
+            None,
+            [],
+            "sector_inadequate",
+            "instituicao financeira: 'resultado antes do resultado financeiro' nao se aplica -- "
+            "o resultado financeiro E o negocio principal (fase1.md 50)",
+        )
     else:
         emit("ebit", ebit, _docs(ebit_f), *_ok_or_missing(ebit, "conta EBIT nao encontrada no DRE"))
 
-    emit("operating_cash_flow", ocf, _docs(ocf_f),
-         *_ok_or_missing(ocf, "conta 'Caixa Liquido Atividades Operacionais' nao encontrada no DFC"))
+    emit(
+        "operating_cash_flow",
+        ocf,
+        _docs(ocf_f),
+        *_ok_or_missing(ocf, "conta 'Caixa Liquido Atividades Operacionais' nao encontrada no DFC"),
+    )
 
     if financial_company:
-        emit("capex", None, [], "sector_inadequate", "instituicao financeira: capex nao se aplica (fase1.md 50)")
-        emit("free_cash_flow", None, [], "sector_inadequate",
-             "instituicao financeira: free_cash_flow nao se aplica (fase1.md 50)")
+        emit(
+            "capex",
+            None,
+            [],
+            "sector_inadequate",
+            "instituicao financeira: capex nao se aplica (fase1.md 50)",
+        )
+        emit(
+            "free_cash_flow",
+            None,
+            [],
+            "sector_inadequate",
+            "instituicao financeira: free_cash_flow nao se aplica (fase1.md 50)",
+        )
     else:
-        emit("capex", capex_total, capex_doc_ids, *_ok_or_missing(
-            capex_total,
-            "nenhuma linha de aquisicao de imobilizado/intangivel reconhecida no DFC "
-            "(vocabulario curado -- CAPEX_DESC -- pode exigir expansao para esta empresa)",
-        ))
+        if capex_total is None:
+            emit(
+                "capex",
+                None,
+                [],
+                "missing_input",
+                "nenhuma linha de aquisicao de imobilizado/intangivel reconhecida no DFC "
+                "(vocabulario curado -- CAPEX_DESC -- pode exigir expansao para esta empresa)",
+            )
+        elif capex_combined:
+            emit(
+                "capex",
+                capex_total,
+                capex_doc_ids,
+                "estimated",
+                "linha combinada 'Adicoes ao Imobilizado e investimentos' -- inclui participacoes "
+                "societarias, capex levemente superestimado (fase2_plan §35)",
+            )
+        else:
+            emit("capex", capex_total, capex_doc_ids, "ok", None)
+
         if ocf is not None and capex_total is not None:
-            emit("free_cash_flow", ocf + capex_total, sorted(set(_docs(ocf_f)) | set(capex_doc_ids)), "ok",
-                 "derivado: operating_cash_flow + capex (capex ja negativo, convencao de sinal da CVM)")
+            fcf_flag = "estimated" if capex_combined else "ok"
+            fcf_reason = (
+                "derivado: operating_cash_flow + capex (capex ja negativo, convencao da CVM)"
+            )
+            if capex_combined:
+                fcf_reason += "; capex de linha combinada (proxy) -> free_cash_flow tambem estimado"
+            emit(
+                "free_cash_flow",
+                ocf + capex_total,
+                sorted(set(_docs(ocf_f)) | set(capex_doc_ids)),
+                fcf_flag,
+                fcf_reason,
+            )
         else:
             emit("free_cash_flow", None, [], "missing_input", "requer operating_cash_flow e capex")
 
@@ -317,12 +486,25 @@ def _flow_metrics_direct(
     return rows
 
 
-def _emit_growth(emit: Any, name: str, current: Decimal | None, previous: Decimal | None, doc_ids: list[int]) -> None:
+def _emit_growth(
+    emit: Any, name: str, current: Decimal | None, previous: Decimal | None, doc_ids: list[int]
+) -> None:
     if current is not None and previous is not None and previous != 0:
-        emit(name, (current - previous) / abs(previous), doc_ids, "ok",
-             "derivado: (atual - comparativo PENULTIMO do mesmo pacote) / abs(comparativo)")
+        emit(
+            name,
+            (current - previous) / abs(previous),
+            doc_ids,
+            "ok",
+            "derivado: (atual - comparativo PENULTIMO do mesmo pacote) / abs(comparativo)",
+        )
     else:
-        emit(name, None, [], "missing_input", "requer valor atual e comparativo (PENULTIMO) do mesmo pacote")
+        emit(
+            name,
+            None,
+            [],
+            "missing_input",
+            "requer valor atual e comparativo (PENULTIMO) do mesmo pacote",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +512,9 @@ def _emit_growth(emit: Any, name: str, current: Decimal | None, previous: Decima
 # ---------------------------------------------------------------------------
 
 
-def _ratio_metrics(rows: list[dict[str, Any]], *, instrument_id: int, run_id: int | None) -> list[dict[str, Any]]:
+def _ratio_metrics(
+    rows: list[dict[str, Any]], *, instrument_id: int, run_id: int | None
+) -> list[dict[str, Any]]:
     equity_by_ref = {r["reference_date"]: r for r in rows if r["metric_name"] == "equity"}
     by_flow_period: dict[tuple[Any, str], dict[str, dict[str, Any]]] = {}
     for r in rows:
@@ -347,28 +531,63 @@ def _ratio_metrics(rows: list[dict[str, Any]], *, instrument_id: int, run_id: in
             continue
         available_from = anchor["available_from"]
 
-        def emit(name: str, value: Any, doc_ids: list[int], flag: str, reason: str | None,
-                  _rd=reference_date, _pt=period_type, _af=available_from) -> None:
-            out.append({
-                "instrument_id": instrument_id, "reference_date": _rd, "available_from": _af,
-                "period_type": _pt, "metric_name": name, "metric_value": value, "unit": "ratio",
-                "calculation_version": CALCULATION_VERSION, "source_document_ids": sorted(set(doc_ids)) or None,
-                "quality_flag": flag, "quality_reason": reason, "run_id": run_id,
-            })
+        def emit(
+            name: str,
+            value: Any,
+            doc_ids: list[int],
+            flag: str,
+            reason: str | None,
+            _rd=reference_date,
+            _pt=period_type,
+            _af=available_from,
+        ) -> None:
+            out.append(
+                {
+                    "instrument_id": instrument_id,
+                    "reference_date": _rd,
+                    "available_from": _af,
+                    "period_type": _pt,
+                    "metric_name": name,
+                    "metric_value": value,
+                    "unit": "ratio",
+                    "calculation_version": CALCULATION_VERSION,
+                    "source_document_ids": sorted(set(doc_ids)) or None,
+                    "quality_flag": flag,
+                    "quality_reason": reason,
+                    "run_id": run_id,
+                }
+            )
 
-        if net_income and revenue and net_income["metric_value"] is not None and revenue["metric_value"]:
+        if (
+            net_income
+            and revenue
+            and net_income["metric_value"] is not None
+            and revenue["metric_value"]
+        ):
             value = Decimal(net_income["metric_value"]) / Decimal(revenue["metric_value"])
-            docs = (net_income["source_document_ids"] or []) + (revenue["source_document_ids"] or [])
+            docs = (net_income["source_document_ids"] or []) + (
+                revenue["source_document_ids"] or []
+            )
             emit("net_margin", value, docs, "ok", "derivado: net_income / revenue")
         else:
             emit("net_margin", None, [], "missing_input", "requer net_income e revenue")
 
-        if net_income and equity and net_income["metric_value"] is not None and equity["metric_value"]:
+        if (
+            net_income
+            and equity
+            and net_income["metric_value"] is not None
+            and equity["metric_value"]
+        ):
             value = Decimal(net_income["metric_value"]) / Decimal(equity["metric_value"])
             docs = (net_income["source_document_ids"] or []) + (equity["source_document_ids"] or [])
-            emit("roe", value, docs, "ok",
-                 "derivado: net_income / patrimonio liquido de FIM de periodo (simplificacao -- nao e media "
-                 "entre inicio e fim de periodo)")
+            emit(
+                "roe",
+                value,
+                docs,
+                "ok",
+                "derivado: net_income / patrimonio liquido de FIM de periodo (simplificacao -- nao e media "
+                "entre inicio e fim de periodo)",
+            )
         else:
             emit("roe", None, [], "missing_input", "requer net_income e equity")
 
@@ -384,14 +603,22 @@ def _ratio_metrics(rows: list[dict[str, Any]], *, instrument_id: int, run_id: in
 def _derive_isolated_flows(
     rows: list[dict[str, Any]], *, instrument_id: int, financial_company: bool, run_id: int | None
 ) -> list[dict[str, Any]]:
-    ytd_by_metric: dict[str, dict[tuple[int, int], tuple[Any, list[int]]]] = {"operating_cash_flow": {}, "capex": {}}
+    ytd_by_metric: dict[str, dict[tuple[int, int], tuple[Any, list[int]]]] = {
+        "operating_cash_flow": {},
+        "capex": {},
+    }
     for r in rows:
-        if r["period_type"] != "ytd" or r["metric_value"] is None or r["metric_name"] not in ytd_by_metric:
+        if (
+            r["period_type"] != "ytd"
+            or r["metric_value"] is None
+            or r["metric_name"] not in ytd_by_metric
+        ):
             continue
         quarter = _quarter_of(r["reference_date"])
         if quarter is not None:
             ytd_by_metric[r["metric_name"]][(r["reference_date"].year, quarter)] = (
-                r["metric_value"], r["source_document_ids"] or [],
+                r["metric_value"],
+                r["source_document_ids"] or [],
             )
 
     derived: list[dict[str, Any]] = []
@@ -414,17 +641,19 @@ def _derive_isolated_flows(
         value = derive_isolated_quarter_value(
             statement_type="DFC_MI", current_cumulative=current[0], previous_cumulative=previous[0]
         )
-        derived.append({
-            **r,
-            "metric_value": value,
-            "quality_flag": "estimated",
-            "quality_reason": (
-                f"trimestre isolado derivado por subtracao: acumulado ate T{quarter} menos acumulado ate "
-                f"T{quarter - 1} do mesmo ano (fase1.md 44)"
-            ),
-            "source_document_ids": sorted(set(current[1]) | set(previous[1])) or None,
-            "run_id": run_id,
-        })
+        derived.append(
+            {
+                **r,
+                "metric_value": value,
+                "quality_flag": "estimated",
+                "quality_reason": (
+                    f"trimestre isolado derivado por subtracao: acumulado ate T{quarter} menos acumulado ate "
+                    f"T{quarter - 1} do mesmo ano (fase1.md 44)"
+                ),
+                "source_document_ids": sorted(set(current[1]) | set(previous[1])) or None,
+                "run_id": run_id,
+            }
+        )
     return derived
 
 
@@ -443,22 +672,33 @@ def _metrics_for_group(
 
     document_type = current[0]["document_type"]
     reference_date = current[0]["reference_date"]
-    available_from = max((f["available_from"] for f in current if f["available_from"]), default=None)
+    available_from = max(
+        (f["available_from"] for f in current if f["available_from"]), default=None
+    )
     if available_from is None:
         return []  # fundamental_metrics.available_from e NOT NULL -- sem isso, nada e gravado (fase1.md 51)
 
     rows = _balance_metrics(
-        current, instrument_id=instrument_id, reference_date=reference_date,
-        available_from=available_from, financial_company=financial_company, run_id=run_id,
+        current,
+        instrument_id=instrument_id,
+        reference_date=reference_date,
+        available_from=available_from,
+        financial_company=financial_company,
+        run_id=run_id,
     )
 
     primary_current = _flow_slice(current, primary=True)
     primary_previous = _flow_slice(previous, primary=True)
     primary_period_type = "annual" if document_type == "DFP" else "ytd"
     rows += _flow_metrics_direct(
-        primary_current, primary_previous, instrument_id=instrument_id, reference_date=reference_date,
-        available_from=available_from, period_type=primary_period_type,
-        financial_company=financial_company, run_id=run_id,
+        primary_current,
+        primary_previous,
+        instrument_id=instrument_id,
+        reference_date=reference_date,
+        available_from=available_from,
+        period_type=primary_period_type,
+        financial_company=financial_company,
+        run_id=run_id,
     )
 
     if document_type == "ITR":
@@ -466,15 +706,24 @@ def _metrics_for_group(
         iso_previous = _flow_slice(previous, primary=False)
         if iso_current:
             rows += _flow_metrics_direct(
-                iso_current, iso_previous, instrument_id=instrument_id, reference_date=reference_date,
-                available_from=available_from, period_type="quarterly",
-                financial_company=financial_company, run_id=run_id,
+                iso_current,
+                iso_previous,
+                instrument_id=instrument_id,
+                reference_date=reference_date,
+                available_from=available_from,
+                period_type="quarterly",
+                financial_company=financial_company,
+                run_id=run_id,
             )
     return rows
 
 
 def compute_metrics_for_facts(
-    facts: list[dict[str, Any]], *, instrument_id: int, financial_company: bool, run_id: int | None = None
+    facts: list[dict[str, Any]],
+    *,
+    instrument_id: int,
+    financial_company: bool,
+    run_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """Funcao pura: fatos (``financial_statement_facts``, consolidados) de UM
     instrumento -> linhas de ``fundamental_metrics``.
@@ -493,16 +742,30 @@ def compute_metrics_for_facts(
 
     by_key: dict[tuple[str, str, Any], dict[str, Any]] = {}
     for key in sorted(groups, key=lambda k: (k[0], k[1])):
-        for row in _metrics_for_group(groups[key], instrument_id=instrument_id,
-                                       financial_company=financial_company, run_id=run_id):
+        for row in _metrics_for_group(
+            groups[key],
+            instrument_id=instrument_id,
+            financial_company=financial_company,
+            run_id=run_id,
+        ):
             by_key[(row["period_type"], row["metric_name"], row["reference_date"])] = row
 
-    for derived in _derive_isolated_flows(list(by_key.values()), instrument_id=instrument_id,
-                                           financial_company=financial_company, run_id=run_id):
-        by_key[(derived["period_type"], derived["metric_name"], derived["reference_date"])] = derived
+    for derived in _derive_isolated_flows(
+        list(by_key.values()),
+        instrument_id=instrument_id,
+        financial_company=financial_company,
+        run_id=run_id,
+    ):
+        by_key[(derived["period_type"], derived["metric_name"], derived["reference_date"])] = (
+            derived
+        )
 
-    for ratio_row in _ratio_metrics(list(by_key.values()), instrument_id=instrument_id, run_id=run_id):
-        by_key[(ratio_row["period_type"], ratio_row["metric_name"], ratio_row["reference_date"])] = ratio_row
+    for ratio_row in _ratio_metrics(
+        list(by_key.values()), instrument_id=instrument_id, run_id=run_id
+    ):
+        by_key[
+            (ratio_row["period_type"], ratio_row["metric_name"], ratio_row["reference_date"])
+        ] = ratio_row
 
     return list(by_key.values())
 
@@ -510,7 +773,8 @@ def compute_metrics_for_facts(
 def compute_and_store_metrics(ticker: str, *, run_id: int | None = None) -> dict[str, int]:
     """Recalcula e grava ``fundamental_metrics`` para um instrumento (upsert, idempotente)."""
     instrument = fetch_one(
-        "select instrument_id, financial_company from public.instruments where ticker = %s", [ticker.upper()]
+        "select instrument_id, financial_company from public.instruments where ticker = %s",
+        [ticker.upper()],
     )
     if instrument is None:
         raise ValueError(f"instrumento nao cadastrado: {ticker}")
@@ -528,20 +792,39 @@ def compute_and_store_metrics(ticker: str, *, run_id: int | None = None) -> dict
             [instrument["instrument_id"]],
         )
         rows = compute_metrics_for_facts(
-            facts, instrument_id=instrument["instrument_id"],
-            financial_company=bool(instrument["financial_company"]), run_id=run_id,
+            facts,
+            instrument_id=instrument["instrument_id"],
+            financial_company=bool(instrument["financial_company"]),
+            run_id=run_id,
         )
         stats = (
             upsert_many(
-                "fundamental_metrics", rows,
-                conflict_columns=["instrument_id", "reference_date", "period_type", "metric_name", "calculation_version"],
-                update_columns=["available_from", "metric_value", "unit", "source_document_ids",
-                                 "quality_flag", "quality_reason", "run_id"],
+                "fundamental_metrics",
+                rows,
+                conflict_columns=[
+                    "instrument_id",
+                    "reference_date",
+                    "period_type",
+                    "metric_name",
+                    "calculation_version",
+                ],
+                update_columns=[
+                    "available_from",
+                    "metric_value",
+                    "unit",
+                    "source_document_ids",
+                    "quality_flag",
+                    "quality_reason",
+                    "run_id",
+                ],
             )
-            if rows else {"inserted": 0, "updated": 0, "total": 0}
+            if rows
+            else {"inserted": 0, "updated": 0, "total": 0}
         )
         if owns_run:
-            finish_run(run_id, status="success", records_raw=len(facts), records_inserted=stats["total"])
+            finish_run(
+                run_id, status="success", records_raw=len(facts), records_inserted=stats["total"]
+            )
         return {"facts": len(facts), **stats}
     except Exception as exc:
         if owns_run:

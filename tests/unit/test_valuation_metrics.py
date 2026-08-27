@@ -46,6 +46,10 @@ def _petr4_like_facts() -> list[dict]:
         _fact("BPA", "1.01.01", "Caixa e Equivalentes de Caixa", 60_000_000, flow=False),
         _fact("BPP", "2.01.04", "Empréstimos e Financiamentos", 90_000_000, flow=False),
         _fact("BPP", "2.02.01", "Empréstimos e Financiamentos", 210_000_000, flow=False),
+        # circulante p/ working_capital
+        _fact("BPA", "1.01", "Ativo Circulante", 140_000_000, flow=False),
+        _fact("BPA", "1.01.02", "Aplicações Financeiras", 15_000_000, flow=False),
+        _fact("BPP", "2.01", "Passivo Circulante", 198_000_000, flow=False),
     ]
 
 
@@ -205,6 +209,21 @@ class TestNonFinancialHappyPath:
     def test_period_type_annual_para_dfp(self):
         m = _run(_petr4_like_facts())
         assert all(r["period_type"] == "annual" for r in m.values())
+
+    def test_working_capital_operacional_exclui_financeiros(self):
+        m = _run(_petr4_like_facts())
+        wc = m["working_capital"]
+        assert wc["quality_flag"] == "ok"
+        # op_CA = 140 - 60 (caixa) - 15 (aplic. financeiras) = 65 ; op_CL = 198 - 90 (emprést. CP) = 108
+        # WC = 65 - 108 = -43 (em bi -> *1000 MIL)
+        assert wc["metric_value"] == Decimal(
+            (140_000_000 - 60_000_000 - 15_000_000 - (198_000_000 - 90_000_000)) * 1000
+        )
+
+    def test_working_capital_missing_sem_circulante(self):
+        facts = [f for f in _petr4_like_facts() if f["account_code"] not in ("1.01", "2.01")]
+        m = _run(facts)
+        assert m["working_capital"]["quality_flag"] == "missing_input"
 
 
 class TestDAFallbackDVA:

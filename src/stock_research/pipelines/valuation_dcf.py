@@ -11,10 +11,11 @@ DCF V1 é NOMINAL em BRL. Não-financeiras (PETR4, VALE3): FCFF DCF. Bancos
 `analytics.ddm`) -- FCFF não se aplica (§10). Ambos gravam em `valuation_snapshots`
 com `valuation_method` distinto.
 
-FCFF ≈ **média dos últimos 3 exercícios** de ``NOPAT + D&A + capex`` (capex
-negativo). Ignora variação de capital de giro -- refinamento futuro,
-documentado. Média de 3 anos porque um único ano (capex pesado, write-off)
-distorce demais o ponto de partida.
+FCFF ~= media dos ultimos 3 exercicios de ``NOPAT + D&A + capex - delta_WC``
+(capex negativo; delta_WC = variacao do capital de giro OPERACIONAL, fase2_plan
+§35). Custo de divida usa juros puros (DRE 3.06.02.01), com fallback ao nivel 2
+(que inclui cambio) marcado. Media de 3 anos porque um unico ano (capex pesado,
+write-off) distorce demais o ponto de partida.
 """
 
 from __future__ import annotations
@@ -41,6 +42,9 @@ logger = get_logger(__name__)
 PIPELINE = "valuation_dcf"
 FCFF_AVG_YEARS = 3
 _FIN_EXPENSE_DESC = ["Despesas Financeiras"]
+# `3.06.02.01` = juros puros. `3.06.02` (nível 2) inclui variação cambial e
+# monetária -- só como fallback, com flag (fase2_plan §35).
+_INTEREST_BRANCH = ("3.06.02.01",)
 _FIN_EXPENSE_BRANCH = ("3.06.02",)
 
 
@@ -98,27 +102,43 @@ def _latest_annual(
 
 
 def _fcff_avg(instrument_id: int, as_of: date) -> tuple[float | None, list[int], str]:
-    nopat = {
-        r["reference_date"].year: float(r["metric_value"])
-        for r in _latest_annual(instrument_id, "nopat", "valuation_metrics_v1", as_of)
-    }
-    da = {
-        r["reference_date"].year: float(r["metric_value"])
-        for r in _latest_annual(instrument_id, "da", "valuation_metrics_v1", as_of)
-    }
-    capex = {
-        r["reference_date"].year: float(r["metric_value"])
-        for r in _latest_annual(instrument_id, "capex", "fundamental_metrics_v1", as_of)
-    }
+    """FCFF ~= media de 3 anos de ``NOPAT + D&A + capex - delta_WC_operacional``.
+
+    ``capex`` ja vem NEGATIVO (convencao da CVM) -- e somado. ``delta_WC = WC_y
+    - WC_{y-1}``: aumento de capital de giro = uso de caixa -> subtrai. Se
+    ``WC_y`` ou ``WC_{y-1}`` faltar num ano, delta_WC daquele ano fica 0 e o
+    motivo registra que o FCFF ficou sem o ajuste de giro (nunca inventa).
+    """
+
+    def by_year(metric: str, cv: str) -> dict[int, float]:
+        return {
+            r["reference_date"].year: float(r["metric_value"])
+            for r in _latest_annual(instrument_id, metric, cv, as_of)
+        }
+
+    nopat = by_year("nopat", "valuation_metrics_v1")
+    da = by_year("da", "valuation_metrics_v1")
+    capex = by_year("capex", "fundamental_metrics_v1")
+    wc = by_year("working_capital", "valuation_metrics_v1")
+
     years = sorted(set(nopat) & set(da) & set(capex), reverse=True)[:FCFF_AVG_YEARS]
     if len(years) < 2:
         return None, years, f"apenas {len(years)} exercício(s) com NOPAT+D&A+capex"
-    fcff_by_year = [nopat[y] + da[y] + capex[y] for y in years]
-    return (
-        sum(fcff_by_year) / len(fcff_by_year),
-        years,
-        f"média de {len(years)} anos ({min(years)}-{max(years)})",
-    )
+
+    fcff_by_year: list[float] = []
+    no_wc_years: list[int] = []
+    for y in years:
+        base = nopat[y] + da[y] + capex[y]
+        if y in wc and (y - 1) in wc:
+            base -= wc[y] - wc[y - 1]  # delta WC
+        else:
+            no_wc_years.append(y)
+        fcff_by_year.append(base)
+
+    reason = f"média de {len(years)} anos ({min(years)}-{max(years)}), FCFF = NOPAT+D&A+capex menos deltaWC"
+    if no_wc_years:
+        reason += f"; sem ajuste de deltaWC em {no_wc_years} (working_capital ausente)"
+    return sum(fcff_by_year) / len(fcff_by_year), years, reason
 
 
 def _financial_expense_over_debt(
@@ -136,20 +156,27 @@ def _financial_expense_over_debt(
         "  where instrument_id = %s and document_type = 'DFP') ",
         [instrument_id, instrument_id],
     )
-    total, _docs = _sum_per_branch(facts, "DRE", _FIN_EXPENSE_DESC, _FIN_EXPENSE_BRANCH)
-    if total is None:
-        return None, "conta 'Despesas Financeiras' não encontrada"
+    interest, _di = _sum_per_branch(facts, "DRE", _FIN_EXPENSE_DESC, _INTEREST_BRANCH)
+    combined, _dc = _sum_per_branch(facts, "DRE", _FIN_EXPENSE_DESC, _FIN_EXPENSE_BRANCH)
+    if interest is not None:
+        total, src = interest, "juros puros (DRE 3.06.02.01)"
+    elif combined is not None:
+        total, src = combined, "despesa financeira nível 2 (inclui câmbio -- fallback)"
+    else:
+        return None, "conta 'Despesas Financeiras' não encontrada (nem 3.06.02.01 nem 3.06.02)"
+
     raw = abs(float(total)) / gross_debt
     # Piso econômico: uma empresa não capta abaixo do soberano. O piso do config
     # (4%) só vale quando não há risk-free; havendo, o piso é o risk-free.
     floor = risk_free_rate if risk_free_rate is not None else float(cfg["floor"])
     rate = max(floor, min(float(cfg["cap"]), raw))
+    base = f"{src} / dívida bruta = {raw:.4f}"
     if rate != raw:
-        return rate, (
-            f"despesa financeira / dívida bruta = {raw:.4f}, ajustado para {rate:.4f} "
-            f"(piso = {'risk-free' if risk_free_rate is not None else 'config'})"
+        return (
+            rate,
+            f"{base}, ajustado para {rate:.4f} (piso = {'risk-free' if risk_free_rate is not None else 'config'})",
         )
-    return rate, f"despesa financeira / dívida bruta = {rate:.4f} (com piso/teto)"
+    return rate, base
 
 
 def compute_and_store_dcf(

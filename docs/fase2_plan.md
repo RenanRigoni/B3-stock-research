@@ -1567,3 +1567,62 @@ subtrai o `brazil_default_spread` do risk-free (uma vez) e soma o `country_risk_
    ser o **risk-free** (empresa não capta abaixo do governo); o piso do config só vale
    quando não há risk-free. Depois: PETR4 WACC 15,7%, VALE3 16,3%, `company_credit_spread`
    = +0,0% (a proxy de despesa financeira é fraca — limitação já registrada em §34.4).
+
+---
+
+# REFINOS DO DCF (§35, 2026-08-27) -- decisões do usuário aplicadas
+
+## 35. CAPEX_DESC, ΔWC no FCFF e cost of debt de juros puros
+
+### 35.1 CAPEX_DESC -- só o typo entra como capex puro
+
+Adicionado `"Adilções ao imobilizado"` a `CAPEX_DESC` (typo da própria CVM, VALE3
+2012) -- é inequivocamente aquisição de imobilizado.
+
+A linha **combinada** `"Adições ao Imobilizado e investimentos"` (VALE3 Q3 de
+2018-2025) **NÃO entra em `CAPEX_DESC`** como se fosse capex puro. Ela é
+`CAPEX_COMBINED_DESC`, usada só como **fallback** quando nenhuma linha de
+imobilizado separada existe no pacote, e **sempre** com:
+- `capex.quality_flag = 'estimated'`, motivo "linha combinada ... inclui
+  participações societárias, capex levemente superestimado";
+- `free_cash_flow.quality_flag = 'estimated'` propagado (FCF/DCF não ganham
+  falsa precisão).
+
+Efeito: `free_cash_flow` TTM da VALE3, que parava em 2018-06-30, agora vai até
+2026-06-30 (as linhas de 2018+ ficam `estimated`, nunca `ok`).
+
+### 35.2 FCFF passa a incluir ΔWC operacional
+
+`FCFF ≈ média de 3 anos de (NOPAT + D&A + capex − ΔWC)`, com:
+- **capex negativo** (convenção da CVM, confirmado: `capex` 2025 = −108,7 bi
+  PETR4 / −33,4 bi VALE3) -- é **somado**;
+- **ΔWC = WC_y − WC_{y-1}**; aumento de capital de giro = uso de caixa → **subtrai**;
+- **WC operacional** (nova métrica `working_capital` em `valuation_metrics_v1`,
+  `point_in_time`): `(Ativo Circulante − Caixa − Aplicações Financeiras) −
+  (Passivo Circulante − Empréstimos e Financiamentos de CP)`. Exclui os itens
+  claramente financeiros, como o usuário pediu. O plano de contas padronizado da
+  CVM tem esses níveis-2 idênticos entre PETR4/VALE3 e todos os 16 anos.
+- Se `WC_y` ou `WC_{y-1}` faltar num ano, o ΔWC daquele ano fica 0 e o
+  `quality_reason` do snapshot registra "sem ajuste de deltaWC em [anos]" --
+  nunca inventa.
+
+Efeito: PETR4 FCFF 100,7 bi → 111,5 bi (giro encolheu 2023-25), fair base
+R$45,44 → R$53,14 (MoS +9% → +22%). VALE3 FCFF 20,8 bi → 24,3 bi, fair R$24,92 →
+R$31,83 (MoS −215% → −146%).
+
+### 35.3 Cost of debt -- juros puros (DRE 3.06.02.01) com fallback
+
+`_financial_expense_over_debt` agora tenta primeiro `3.06.02.01` ("Despesas
+financeiras" -- juros puros; presente em PETR4 2010-2025 e VALE3 2016-2025).
+Fallback documentado para `3.06.02` (nível 2, **inclui variação cambial e
+monetária**) com a fonte registrada no motivo. Se nenhum dos dois existir →
+`missing_input` (nunca assume zero).
+
+O piso econômico continua sendo o **risk-free** (empresa não capta abaixo do
+soberano). Achado: para PETR4 e VALE3, `juros puros / dívida bruta` dá ~6,5%
+(dívida legada barata) -- **abaixo** do risk-free de 12,37% -- então o resultado
+é o mesmo do fallback anterior: `pretax_cost_of_debt` = risk-free,
+`company_credit_spread` = 0. O motivo do WACC agora explicita isso:
+"juros puros (DRE 3.06.02.01) / dívida bruta = 0.0647, ajustado para 0.1237
+(piso = risk-free)". Refino futuro: usar spread de crédito observado (CDS/emissões)
+em vez da proxy contábil.

@@ -74,6 +74,15 @@ DA_DVA_BRANCH = "7."
 PRETAX_DESC = ["Resultado Antes dos Tributos sobre o Lucro"]
 INCOME_TAX_DESC = ["Imposto de Renda e Contribuição Social sobre o Lucro"]
 
+# Capital de giro OPERACIONAL (fase2_plan §35): ativo/passivo circulante SEM os
+# itens financeiros -- exclui caixa, aplicações financeiras (do ativo) e
+# empréstimos/financiamentos de curto prazo (do passivo). O plano de contas
+# padronizado da CVM tem esses níveis-2 idênticos entre empresas e anos.
+CURRENT_ASSETS_DESC = ["Ativo Circulante"]
+CURRENT_LIAB_DESC = ["Passivo Circulante"]
+FIN_INVEST_DESC = ["Aplicações Financeiras"]
+SHORT_TERM_DEBT_BRANCH = ("2.01",)
+
 _SECTOR_INADEQUATE_FOR_BANKS = {"ebitda", "nopat", "invested_capital", "roic"}
 _RATIO_METRICS = {"effective_tax_rate", "roic"}
 
@@ -294,6 +303,34 @@ def _metrics_for_group(
         )
     else:
         emit("roic", None, [], "missing_input", "requer nopat e invested_capital != 0")
+
+    # working_capital operacional (fase2_plan §35) -- só para não-financeiras.
+    ca_f = _match_one(current, "BPA", CURRENT_ASSETS_DESC)
+    cl_f = _match_one(current, "BPP", CURRENT_LIAB_DESC)
+    fin_inv_f = _match_one(current, "BPA", FIN_INVEST_DESC)
+    st_debt, st_debt_docs = _sum_per_branch(current, "BPP", DEBT_DESC, SHORT_TERM_DEBT_BRANCH)
+    current_assets = _scaled(ca_f) if ca_f else None
+    current_liab = _scaled(cl_f) if cl_f else None
+    fin_inv = (_scaled(fin_inv_f) or Decimal(0)) if fin_inv_f else Decimal(0)  # ausente = 0
+    if current_assets is not None and current_liab is not None and cash is not None:
+        op_ca = current_assets - cash - fin_inv
+        op_cl = current_liab - (st_debt or Decimal(0))
+        wc = op_ca - op_cl
+        emit(
+            "working_capital",
+            wc,
+            sorted(set(_docs(ca_f)) | set(_docs(cl_f)) | set(_docs(cash_f)) | set(st_debt_docs)),
+            "ok",
+            "derivado: (ativo circ. - caixa - aplic. financeiras) - (passivo circ. - emprést. CP)",
+        )
+    else:
+        emit(
+            "working_capital",
+            None,
+            [],
+            "missing_input",
+            "requer Ativo Circulante, Passivo Circulante e Caixa",
+        )
 
     return rows
 
