@@ -6,8 +6,10 @@ WACC (§21.6) -> DCF FCFF 5 anos + Gordon terminal, 3 cenários -> margem de
 segurança. Grava `risk_free_assumptions`, `equity_risk_premium_assumptions`,
 `wacc_assumptions`, `valuation_snapshots`.
 
-DCF V1 é NOMINAL em BRL. Só não-financeiras (PETR4, VALE3) -- bancos exigem
-Residual Income / DDM, fora do escopo da V1 (§10).
+DCF V1 é NOMINAL em BRL. Não-financeiras (PETR4, VALE3): FCFF DCF. Bancos
+(ITUB4): Residual Income Model + Dividend Discount Model (`analytics.residual_income`,
+`analytics.ddm`) -- FCFF não se aplica (§10). Ambos gravam em `valuation_snapshots`
+com `valuation_method` distinto.
 
 FCFF ≈ **média dos últimos 3 exercícios** de ``NOPAT + D&A + capex`` (capex
 negativo). Ignora variação de capital de giro -- refinamento futuro,
@@ -222,16 +224,7 @@ def _run_one(
         _store_erp(erp, run_id)
 
     if bool(company["financial_company"]):
-        snap = _empty_snapshot(
-            company_id,
-            as_of,
-            "sector_inadequate",
-            "perfil banco -- FCFF DCF não se aplica; usar Residual Income/DDM (§10)",
-        )
-        _store_snapshots(
-            company_id, as_of, {"base": snap}, wacc=None, run_id=run_id, erp=erp, rf=rf
-        )
-        return {"ticker": ticker, "as_of": as_of.isoformat(), "status": "sector_inadequate"}
+        return _run_bank(company, inst, as_of, cfg, run_id, erp=erp, rf=rf)
 
     # --- insumos da empresa --------------------------------------------------
     bres = _company_beta(ticker, cfg)
@@ -301,6 +294,129 @@ def _run_one(
         "as_of": as_of.isoformat(),
         "wacc": wacc.get("wacc"),
         "fcff_start": fcff,
+        "fair_value_base": base.get("fair_value_per_share"),
+        "margin_of_safety_base": base.get("margin_of_safety"),
+        "quality_flag": base.get("quality_flag"),
+        "quality_reason": base.get("quality_reason"),
+    }
+
+
+def _run_bank(
+    company: dict[str, Any],
+    inst: dict[str, Any],
+    as_of: date,
+    cfg: dict[str, Any],
+    run_id: int,
+    *,
+    erp: dict[str, Any] | None,
+    rf: dict[str, Any],
+) -> dict[str, Any]:
+    """Bancos: Residual Income + DDM (§10). FCFF não se aplica."""
+    from stock_research.analytics.ddm import compute_ddm
+    from stock_research.analytics.residual_income import (
+        compute_residual_income,
+        cost_of_equity,
+    )
+
+    company_id = company["company_id"]
+    ticker = inst["ticker"]
+    pid = inst["instrument_id"]
+
+    bres = _company_beta(ticker, cfg)
+    coe = cost_of_equity(
+        risk_free_nominal_brl=rf.get("risk_free_rate"),
+        beta=bres.get("beta"),
+        mature_market_erp=float(erp["mature_market_erp"]) if erp else None,
+        country_risk_premium=float(erp["country_risk_premium"]) if erp else None,
+    )
+
+    equity = _pit(pid, "equity", as_of)
+    ni_rows = _latest_annual(pid, "net_income", "fundamental_metrics_v1", as_of)
+    net_income = float(ni_rows[0]["metric_value"]) if ni_rows else None
+
+    mult = fetch_one(
+        "select dividends_ttm, market_cap from public.valuation_multiples "
+        "where company_id = %s and basis = 'fy' order by as_of_date desc limit 1",
+        [company_id],
+    )
+    dividends_ttm_total = (
+        float(mult["dividends_ttm"]) if mult and mult["dividends_ttm"] is not None else None
+    )
+    shares_row = fetch_one(
+        "select shares_issued from public.share_count_history "
+        "where company_id = %s and share_class = 'TOTAL' and shares_issued is not null "
+        "and available_from <= %s order by available_from desc, reference_date desc limit 1",
+        [company_id, as_of],
+    )
+    shares = float(shares_row["shares_issued"]) if shares_row else None
+    div_ps = (
+        dividends_ttm_total / shares
+        if dividends_ttm_total is not None and shares and shares > 0
+        else None
+    )
+    payout = (
+        max(0.0, min(1.0, dividends_ttm_total / net_income))
+        if dividends_ttm_total is not None and net_income and net_income > 0
+        else 0.5
+    )
+
+    prices = _prices(ticker, since=(as_of.replace(year=as_of.year - 1)).isoformat())
+    price = None
+    if prices and any(d <= as_of for d in prices):
+        price = prices[max(d for d in prices if d <= as_of)]
+
+    dcfg = cfg["dcf"]
+    tg = float(dcfg["terminal_growth_nominal"])
+    ri_scen: dict[str, dict[str, Any]] = {}
+    ddm_scen: dict[str, dict[str, Any]] = {}
+    for name, scfg in dcfg["scenarios"].items():
+        g = float(scfg["forecast_growth"])
+        ri_scen[name] = compute_residual_income(
+            equity_start=equity,
+            net_income_start=net_income,
+            coe=coe,
+            net_income_growth=g,
+            terminal_growth=tg,
+            payout_ratio=payout,
+            shares=shares,
+            market_price_per_share=price,
+            forecast_years=int(dcfg["forecast_years"]),
+        )
+        ddm_scen[name] = compute_ddm(
+            dividend_ttm_per_share=div_ps,
+            coe=coe,
+            dividend_growth=g,
+            terminal_growth=tg,
+            market_price_per_share=price,
+            forecast_years=int(dcfg["forecast_years"]),
+        )
+
+    _store_snapshots(
+        company_id,
+        as_of,
+        ri_scen,
+        wacc={"wacc": coe},
+        run_id=run_id,
+        erp=erp,
+        rf=rf,
+        method="residual_income",
+    )
+    _store_snapshots(
+        company_id,
+        as_of,
+        ddm_scen,
+        wacc={"wacc": coe},
+        run_id=run_id,
+        erp=erp,
+        rf=rf,
+        method="ddm",
+    )
+    base = ri_scen.get("base", {})
+    return {
+        "ticker": ticker,
+        "as_of": as_of.isoformat(),
+        "status": "bank",
+        "cost_of_equity": coe,
         "fair_value_base": base.get("fair_value_per_share"),
         "margin_of_safety_base": base.get("margin_of_safety"),
         "quality_flag": base.get("quality_flag"),
@@ -434,10 +550,6 @@ def _store_wacc(company_id: int, as_of: date, wacc: dict[str, Any], run_id: int)
     )
 
 
-def _empty_snapshot(company_id: int, as_of: date, flag: str, reason: str) -> dict[str, Any]:
-    return {"quality_flag": flag, "quality_reason": reason, "fair_value_per_share": None}
-
-
 def _store_snapshots(
     company_id: int,
     as_of: date,
@@ -447,6 +559,7 @@ def _store_snapshots(
     run_id: int,
     erp: dict[str, Any] | None,
     rf: dict[str, Any],
+    method: str = "fcff",
 ) -> None:
     rows = []
     for scenario, res in scenarios.items():
@@ -454,7 +567,7 @@ def _store_snapshots(
             {
                 "company_id": company_id,
                 "as_of_date": as_of,
-                "valuation_method": "fcff",
+                "valuation_method": method,
                 "scenario": scenario,
                 "fair_value_per_share": res.get("fair_value_per_share"),
                 "market_price_per_share": res.get("market_price_per_share"),
