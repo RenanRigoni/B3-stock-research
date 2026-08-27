@@ -211,7 +211,21 @@ Metodologia `quality_bank_v1` ainda não tem dados suficientes hoje (ver §13 �
 não resolvido). Enquanto isso: **`score_status = 'incomplete'`, nunca um score artificial
 construído sobre campos `sector_inadequate`.** Isso é regra dura, não sugestão.
 
-## 10. DCF — só não-financeiras (PETR4, VALE3)
+## 10. DCF — só não-financeiras — CÓDIGO COMPLETO, MIGRATION PENDENTE (2026-08-27)
+
+> **Andamento**: módulos puros (`analytics/beta.py`, `analytics/wacc.py`,
+> `analytics/dcf.py`, `transforms/risk_free.py`) + fonte `sources/macro/tesouro.py` +
+> orquestração `pipelines/valuation_dcf.py` + CLI `compute-dcf`. Configs:
+> `config/wacc_v1.yaml`, `config/equity_risk_premium_snapshots.yaml` (ERP Damodaran
+> jan/2026 curado à mão — §16.4). Migration `20260827000006_dcf_and_macro.sql`
+> (`risk_free_assumptions`, `equity_risk_premium_assumptions`, `wacc_assumptions`,
+> `valuation_snapshots`) **NÃO aplicada** — `compute-dcf` só grava depois disso.
+> Sanity check com dado real (sem gravar): risk-free 12,4%, beta PETR4 0,97, WACC ~17%,
+> DCF PETR4 fair R$19-35 vs R$41; VALE3 FCFF 2025 negativo → `not_applicable`; ITUB4
+> banco → pulado. Ver §34.
+>
+> **FCFF V1 = média de 3 anos de `NOPAT + D&A + capex`** (capex negativo), não
+> `OCF + capex` (que é mais FCFE). Ignora ΔWC — refinamento futuro documentado.
 
 **FCFF DCF**, arquitetura: 5 anos de projeção explícita + Terminal Value (Gordon Growth
 como preferencial). **WACC por empresa, nunca uma taxa fixa global.**
@@ -1461,3 +1475,61 @@ ficaram mais recentes que PETR4/VALE3/ITUB4 (spread de ~19 pregões). `compute_m
 agora emite aviso e degrada `quality_flag` para `estimated` quando o spread de datas entre
 as classes passa de `MAX_PRICE_DATE_SPREAD_DAYS` (3). Resolvido no run com `update-prices`
 antes do `compute-multiples`.
+
+---
+
+# ACHADOS DA IMPLEMENTAÇÃO — DCF (§10, 2026-08-27)
+
+## 34. DCF FCFF -- decisões e achados da V1
+
+### 34.1 Fontes externas validadas contra o real
+
+- **Tesouro Prefixado** (`PrecoTaxaTesouroDireto.csv`, Tesouro Transparente): baixado e
+  parseado. 14,4 MB, ~175k linhas, encoding latin-1, separador `;`, decimal com vírgula,
+  datas `dd/mm/aaaa`. Tipos: `Tesouro Prefixado` e `Tesouro Prefixado com Juros Semestrais`
+  (usados) + IPCA+/Selic/Educa+/Renda+ (ignorados). Regra §21.2 (maturidade mais próxima de
+  10 anos) escolhe, para `as_of` 2026-08-27, o Prefixado c/ Juros Semestrais venc. 2037-01-01,
+  base 2026-08-26, yield médio 14,5% → risk-free 12,37% (após subtrair o default spread).
+- **Damodaran ERP** (`ctryprem.xlsx`): baixado e lido (via `zipfile`+`xml.etree`, sem
+  dependência nova). Aba "Regional breakdown", Brazil: Adj. Default Spread **2,1275%**,
+  Equity Risk Premium **7,4710%**, Country Risk Premium **3,2410%**, mature_market_erp
+  derivado (= ERP total − CRP) **4,23%** (bate com o "US equity risk premium" da aba "ERPs
+  by country"). **Não há download automatizado confiável** (sem `openpyxl`/`lxml` no projeto;
+  planilha manual anual do autor) → virou `config/equity_risk_premium_snapshots.yaml`
+  transcrito à mão, com `available_from` conservador (2026-02-16). Backfill de snapshots
+  históricos exige transcrever os arquivos arquivados da Damodaran.
+
+### 34.2 FCFF = NOPAT + D&A + capex (média de 3 anos)
+
+O primeiro teste com `free_cash_flow` da Fase 1 (`OCF + capex`) deu fair value **absurdo**
+para PETR4 (R$92-127) — `OCF` inclui variação de capital de giro favorável e não é o fluxo
+pré-financiamento que um DCF descontado a WACC pede. Trocado por **FCFF ≈ NOPAT + D&A +
+capex** (todos anuais, `valuation_metrics_v1`/`fundamental_metrics_v1`, `ok` nas 3 empresas,
+16 anos). Média de 3 anos porque um único ano de capex pesado distorce o ponto de partida.
+Resultado coerente: PETR4 FCFF 2023-25 ≈ R$83 bi (NOPAT ~107 + D&A ~84 + capex ~−109), DCF
+fair R$19-35 vs preço R$41.
+
+### 34.3 `free_cash_flow` TTM da VALE3 para em 2018 (gap pré-existente da Fase 1)
+
+`fundamental_metrics` da VALE3: `free_cash_flow` **anual** = `ok` em todos os 16 anos, mas
+`ytd`/`quarterly` têm buracos pós-2018 (o mapeamento de `CAPEX_DESC` da Fase 1 não casa
+algumas linhas de `6.02.x` do DFC da VALE3 em certos trimestres). Como o TTM exige 4
+trimestres consecutivos, `free_cash_flow` TTM da VALE3 só existe até 2018-06-30. **Não
+bloqueia o DCF** (que usa FCFF anual), mas o `valuation_multiples --basis ttm` da VALE3 tem
+FCF yield stale/nulo. Corrigir o `CAPEX_DESC` para a VALE3 é trabalho da Fase 1, fora do
+escopo desta rodada.
+
+### 34.4 Cost of debt = despesa financeira / dívida bruta (com piso/teto)
+
+`DRE` conta `3.06.02` "Despesas Financeiras" (PETR4 e VALE3, 16 anos). `pretax_cost_of_debt
+= abs(despesa financeira) / dívida bruta`, limitado a [4%, 30%] (`config/wacc_v1.yaml`),
+porque "Despesas Financeiras" inclui variação cambial e correção monetária — pode inflar
+muito num ano de real fraco. Refinamento: isolar só juros (`3.06.02.01`) — não feito na V1.
+
+### 34.5 Anti-dupla-contagem de risco Brasil — testado
+
+`tests/unit/test_wacc.py::test_risco_brasil_nao_conta_em_dobro_no_mesmo_lugar`: uma
+implementação que usasse o yield BRUTO como risk-free **e** somasse o `country_risk_premium`
+inteiro no cost of equity infla o WACC em > 2 p.p. — o teste pega. A implementação correta
+subtrai o `brazil_default_spread` do risk-free (uma vez) e soma o `country_risk_premium`
+(uma vez, aditivo), canais distintos (§21.6).
