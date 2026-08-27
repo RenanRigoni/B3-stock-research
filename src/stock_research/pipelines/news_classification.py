@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from stock_research.config import load_taxonomy
-from stock_research.db import fetch_all, finish_run, start_run, upsert_many
+from stock_research.db import fetch_all, fetch_all_paginated, finish_run, start_run, upsert_many
 from stock_research.logging import get_logger
 from stock_research.transforms.news_classifier import classify, to_analysis_row
 
@@ -43,15 +43,18 @@ def classify_news(ticker: str) -> dict[str, Any]:
 
 def _classify_for_instrument(instrument_id: int) -> dict[str, int]:
     taxonomy = load_taxonomy()
-    rows = fetch_all(
+    rows = fetch_all_paginated(
         "select a.article_id, a.title, a.domain, a.duplicate_cluster_id, a.is_cluster_canonical, "
         "       a.published_at_utc, l.relevance_score "
         "from public.news_articles a join public.news_company_links l using (article_id) "
-        "where l.instrument_id = %s",
+        "where l.instrument_id = %s and a.article_id > %s "
+        "order by a.article_id "
+        "limit %s",
         [instrument_id],
     )
     if not rows:
         return {"considered": 0, "classified": 0}
+    logger.info("classify-news: %d artigo(s) buscados, classificando", len(rows))
 
     novelty_by_article = _novelty_scores(rows)
 
@@ -68,11 +71,13 @@ def _classify_for_instrument(instrument_id: int) -> dict[str, int]:
             )
         )
 
+    logger.info("classify-news: classificacao concluida, gravando %d linha(s)", len(analysis_rows))
     stats = upsert_many(
         "news_analysis", analysis_rows,
         conflict_columns=["article_id", "instrument_id", "analysis_method", "analysis_version"],
         update_columns=ANALYSIS_UPDATE_COLUMNS,
     )
+    logger.info("classify-news: classificacao gravada")
     return {"considered": len(rows), "classified": stats["total"]}
 
 

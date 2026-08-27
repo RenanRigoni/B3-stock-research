@@ -65,6 +65,38 @@ def fetch_one(query: str, params: list[Any] | None = None) -> dict[str, Any] | N
     return rows[0] if rows else None
 
 
+_PAGINATED_PAGE_SIZE = 20_000
+
+
+def fetch_all_paginated(
+    query: str, base_params: list[Any], *, id_column: str = "article_id", page_size: int = _PAGINATED_PAGE_SIZE
+) -> list[dict[str, Any]]:
+    """Pagina por keyset em vez de trazer a tabela inteira numa chamada.
+
+    ``query`` deve terminar com ``{id_column} > %s order by {id_column} limit
+    %s`` (nessa ordem), com os placeholders de ``base_params`` vindo antes.
+    Cada pagina fica sempre pequena o bastante pra nao bater no
+    statement_timeout do banco, nao importa quantas linhas o filtro completo
+    (``base_params``) acabe cobrindo -- PETR4 (fase1.1) tem 166 mil artigos
+    brutos, e mais de uma consulta desse tamanho ja travou minutos/horas
+    numa unica chamada (fila de conexao do pooler no tier Nano, nao lentidao
+    da query). Keyset em vez de OFFSET: usa o indice da coluna direto, nao
+    degrada com a paginacao avancando (OFFSET reescaneia as paginas
+    anteriores toda vez).
+    """
+    rows: list[dict[str, Any]] = []
+    last_id = 0
+    while True:
+        chunk = fetch_all(query, [*base_params, last_id, page_size])
+        if not chunk:
+            break
+        rows.extend(chunk)
+        last_id = chunk[-1][id_column]
+        if len(chunk) < page_size:
+            break
+    return rows
+
+
 def execute(statement: str, params: list[Any] | None = None) -> None:
     """Comando sem retorno."""
     if _is_pg():
@@ -308,6 +340,7 @@ __all__ = [
     "connection",
     "execute",
     "fetch_all",
+    "fetch_all_paginated",
     "fetch_one",
     "finish_run",
     "healthcheck",
