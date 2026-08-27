@@ -81,6 +81,7 @@ def _build_events_for_instrument(instrument_id: int, exchange: str) -> dict[str,
     candidates = _event_candidates(instrument_id, min_relevance)
     if not candidates:
         return {"candidates": 0, "events": 0, "confounded": 0}
+    logger.info("build-events: %d candidato(s) de evento", len(candidates))
 
     calendar = _DbCalendar(exchange)
     event_rows = []
@@ -126,15 +127,28 @@ def _build_events_for_instrument(instrument_id: int, exchange: str) -> dict[str,
             "time_precision", "market_session_uncertain", "scope", "relevance_score", "sentiment", "confidence",
         ],
     )
+    logger.info("build-events: %d evento(s) gravado(s)", stats["total"])
 
+    # Um upsert_many so pra todos os vinculos, nao um por evento: com milhares
+    # de eventos (PETR4 na Fase 1.1) um round-trip HTTP por evento so pra
+    # gravar event_articles virou o mesmo gargalo ja corrigido em
+    # analyze-news (_count_unique_domains por cluster) -- mesma causa raiz,
+    # lugar diferente.
     event_ids = _event_ids_by_source(instrument_id, [a[0] for a in article_links])
-    for source_id, article_ids, primary_article_id in article_links:
-        event_id = event_ids.get(source_id)
-        if event_id is None:
-            continue
-        _link_event_articles(event_id, article_ids, primary_article_id)
+    event_article_rows = [
+        {"event_id": event_id, "article_id": aid, "relationship": "reports", "is_primary": aid == primary_article_id}
+        for source_id, article_ids, primary_article_id in article_links
+        if (event_id := event_ids.get(source_id)) is not None
+        for aid in article_ids
+    ]
+    upsert_many(
+        "event_articles", event_article_rows, conflict_columns=["event_id", "article_id"],
+        update_columns=["relationship", "is_primary"],
+    )
+    logger.info("build-events: %d vinculo(s) evento-artigo gravado(s)", len(event_article_rows))
 
     confounded = _mark_confounded_events(instrument_id)
+    logger.info("build-events: %d evento(s) confundido(s) marcado(s)", confounded)
 
     return {"candidates": len(candidates), "events": stats["total"], "confounded": confounded}
 
@@ -215,17 +229,6 @@ def _event_ids_by_source(instrument_id: int, source_ids: list[str]) -> dict[str,
     return {r["source_id"]: r["event_id"] for r in rows}
 
 
-def _link_event_articles(event_id: int, article_ids: list[int], primary_article_id: int) -> None:
-    rows = [
-        {"event_id": event_id, "article_id": aid, "relationship": "reports", "is_primary": aid == primary_article_id}
-        for aid in article_ids
-    ]
-    upsert_many(
-        "event_articles", rows, conflict_columns=["event_id", "article_id"],
-        update_columns=["relationship", "is_primary"],
-    )
-
-
 def _mark_confounded_events(instrument_id: int) -> int:
     """fase1.md 93: dois eventos do mesmo instrumento no mesmo
     ``effective_trade_date`` contaminam a leitura um do outro -- marca os
@@ -238,15 +241,34 @@ def _mark_confounded_events(instrument_id: int) -> int:
         [instrument_id],
     )
     confounded = 0
+    updates: list[tuple[int, int, bool]] = []
     for row in rows:
         overlap = int(row["n"]) - 1
-        execute(
-            "update public.events set overlapping_event_count = %s, is_confounded = %s where event_id = %s",
-            [overlap, overlap > 0, row["event_id"]],
-        )
+        updates.append((row["event_id"], overlap, overlap > 0))
         if overlap > 0:
             confounded += 1
+    _apply_confounded_flags(updates)
     return confounded
+
+
+_CONFOUNDED_BATCH_SIZE = 1000
+
+
+def _apply_confounded_flags(updates: list[tuple[int, int, bool]]) -> None:
+    """``updates``: ``(event_id, overlapping_event_count, is_confounded)``. Um
+    UPDATE por lote via ``VALUES``, nao um por evento -- mesmo gargalo ja
+    corrigido em analyze-news (round-trip HTTP por item em vez de lote)."""
+    for start in range(0, len(updates), _CONFOUNDED_BATCH_SIZE):
+        chunk = updates[start : start + _CONFOUNDED_BATCH_SIZE]
+        values_sql = ", ".join("(%s::bigint, %s::int, %s::boolean)" for _ in chunk)
+        params = [value for row in chunk for value in row]
+        execute(
+            "update public.events as t "
+            "set overlapping_event_count = v.overlap, is_confounded = v.confounded "
+            f"from (values {values_sql}) as v(event_id, overlap, confounded) "
+            "where t.event_id = v.event_id",
+            params,
+        )
 
 
 def _parse_hhmm(text: str) -> Any:
