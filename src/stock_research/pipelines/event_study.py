@@ -79,14 +79,21 @@ def _run_for_instrument(instrument: dict[str, Any], benchmark: dict[str, Any], *
     )
     if not events:
         return {"events": 0, "studies": 0}
+    logger.info("run-event-study: %d evento(s) com data resolvida", len(events))
 
     calendar = _CalendarIndex(instrument["exchange"])
     stock_prices = _price_series(instrument["instrument_id"])
     bench_prices = _price_series(benchmark["instrument_id"])
     stock_returns_by_date = _returns_series(instrument["instrument_id"])
     bench_returns_by_date = _returns_series(benchmark["instrument_id"])
+    # Volume/volatilidade usava um fetch_all por evento (WHERE trade_date=%s)
+    # e reconstruia _returns_series inteiro a cada chamada -- inviavel pra
+    # PETR4 (21 mil eventos = 21 mil round-trips repetindo trabalho ja feito
+    # acima). Busca tudo uma vez, olha em memoria por evento.
+    volume_stats_by_date = _volume_stats_series(instrument["instrument_id"])
 
-    studies_created = 0
+    study_rows = []
+    per_event = []  # (event_id, combined, stock_horizons) pra montar event_study_returns depois dos ids resolvidos
     for event in events:
         ref_date = event["effective_trade_date"]
         stock_horizons = returns_at_horizons(
@@ -104,10 +111,12 @@ def _run_for_instrument(instrument: dict[str, Any], benchmark: dict[str, Any], *
         )
         combined = abnormal_returns_at_horizons(stock_horizons, bench_horizons, model)
 
-        volume_stats = _volume_and_volatility(instrument["instrument_id"], ref_date, calendar)
+        volume_stats = _volume_and_volatility(
+            volume_stats_by_date.get(ref_date), ref_date, calendar, stock_returns_by_date
+        )
         data_quality = _classify_data_quality(combined, model)
 
-        study_row = {
+        study_rows.append({
             "event_id": event["event_id"],
             "instrument_id": instrument["instrument_id"],
             "effective_trade_date": ref_date,
@@ -129,52 +138,75 @@ def _run_for_instrument(instrument: dict[str, Any], benchmark: dict[str, Any], *
             "data_quality": data_quality,
             "method_version": METHOD_VERSION,
             "run_id": run_id,
-        }
-        event_study_id = _upsert_study(study_row)
+        })
+        per_event.append((event["event_id"], combined, stock_horizons))
 
-        return_rows = [
-            {
-                "event_study_id": event_study_id,
-                "horizon_days": r.horizon_days,
-                "return_actual": r.return_actual,
-                "benchmark_return": r.benchmark_return,
-                "excess_return": r.excess_return,
-                "expected_return": r.expected_return,
-                "abnormal_return": r.abnormal_return,
-                "car": r.car,
-                "end_trade_date": next((h.end_trade_date for h in stock_horizons if h.horizon_days == r.horizon_days), None),
-                "is_censored": r.is_censored,
-            }
-            for r in combined
-        ]
-        upsert_many(
-            "event_study_returns", return_rows, conflict_columns=["event_study_id", "horizon_days"],
-            update_columns=[
-                "return_actual", "benchmark_return", "excess_return", "expected_return",
-                "abnormal_return", "car", "end_trade_date", "is_censored",
-            ],
-        )
-        studies_created += 1
-
-    return {"events": len(events), "studies": studies_created}
-
-
-def _upsert_study(row: dict[str, Any]) -> int:
-    """``event_studies`` ja tem chave natural
-    (``unique(event_id, method, price_series, method_version)``) e nenhuma
-    coluna identity no payload -- upsert direto, mesmo padrao usado para
-    ``news_clusters`` e ``events``."""
+    logger.info("run-event-study: %d estudo(s) calculado(s), gravando", len(study_rows))
     upsert_many(
-        "event_studies", [row],
+        "event_studies", study_rows,
         conflict_columns=["event_id", "method", "price_series", "method_version"],
-        update_columns=[k for k in row if k not in ("event_id", "method", "price_series", "method_version")],
+        update_columns=[
+            "instrument_id", "effective_trade_date", "benchmark_instrument_id",
+            "estimation_window_start", "estimation_window_end", "observations",
+            "alpha", "beta", "r_squared", "residual_std", "low_sample",
+            "volume_ratio_20", "volume_zscore_20", "volatility_pre_20", "volatility_post_20",
+            "data_quality", "run_id",
+        ],
     )
-    found = fetch_all(
-        "select event_study_id from public.event_studies "
-        "where event_id = %s and method = %s and price_series = %s and method_version = %s",
-        [row["event_id"], row["method"], row["price_series"], row["method_version"]],
+    study_ids = _study_ids_by_event(instrument["instrument_id"], [event_id for event_id, _, _ in per_event])
+    logger.info("run-event-study: %d event_study id(s) resolvido(s)", len(study_ids))
+
+    return_rows = [
+        {
+            "event_study_id": study_ids[event_id],
+            "horizon_days": r.horizon_days,
+            "return_actual": r.return_actual,
+            "benchmark_return": r.benchmark_return,
+            "excess_return": r.excess_return,
+            "expected_return": r.expected_return,
+            "abnormal_return": r.abnormal_return,
+            "car": r.car,
+            "end_trade_date": next((h.end_trade_date for h in stock_horizons if h.horizon_days == r.horizon_days), None),
+            "is_censored": r.is_censored,
+        }
+        for event_id, combined, stock_horizons in per_event
+        if event_id in study_ids
+        for r in combined
+    ]
+    upsert_many(
+        "event_study_returns", return_rows, conflict_columns=["event_study_id", "horizon_days"],
+        update_columns=[
+            "return_actual", "benchmark_return", "excess_return", "expected_return",
+            "abnormal_return", "car", "end_trade_date", "is_censored",
+        ],
     )
-    return int(found[0]["event_study_id"])
+    logger.info("run-event-study: %d retorno(s) gravado(s)", len(return_rows))
+
+    return {"events": len(events), "studies": len(study_rows)}
+
+
+_STUDY_ID_LOOKUP_BATCH = 5000
+
+
+def _study_ids_by_event(instrument_id: int, event_ids: list[int]) -> dict[int, int]:
+    """``event_studies`` ja tem chave natural
+    (``unique(event_id, method, price_series, method_version)``) -- upsert em
+    lote (chamador) e resolve os ids gerados aqui, uma consulta por lote de
+    ``event_id`` em vez de uma consulta (e um upsert!) por evento."""
+    result: dict[int, int] = {}
+    for start in range(0, len(event_ids), _STUDY_ID_LOOKUP_BATCH):
+        chunk = event_ids[start : start + _STUDY_ID_LOOKUP_BATCH]
+        if not chunk:
+            continue
+        placeholders = ", ".join(["%s"] * len(chunk))
+        rows = fetch_all(
+            f"select event_id, event_study_id from public.event_studies "
+            f"where instrument_id = %s and method = %s and price_series = %s and method_version = %s "
+            f"and event_id in ({placeholders})",
+            [instrument_id, METHOD, PRICE_SERIES, METHOD_VERSION, *chunk],
+        )
+        result.update({r["event_id"]: r["event_study_id"] for r in rows})
+    return result
 
 
 def _price_series(instrument_id: int) -> dict[date, Decimal]:
@@ -237,20 +269,30 @@ def _estimation_window_returns(
     }
 
 
-def _volume_and_volatility(instrument_id: int, ref_date: date, calendar: _CalendarIndex) -> dict[str, float | None]:
-    """``volume_ratio_20``/``volume_zscore_20`` ja vem calculado em
-    ``daily_returns`` para D0 (Milestone 2) -- so recupera. Volatilidade
-    pre/pos e o desvio padrao dos retornos diarios nos 20 pregoes antes/
-    depois do evento (fase1.md 60)."""
+def _volume_stats_series(instrument_id: int) -> dict[date, dict[str, Any]]:
+    """``volume_ratio_20``/``volume_zscore_20`` de todo o historico do
+    instrumento numa unica consulta -- antes era um ``fetch_all`` POR EVENTO
+    (``WHERE trade_date = %s``), inviavel com milhares de eventos (PETR4
+    tem 21 mil na Fase 1.1)."""
     rows = fetch_all(
-        "select volume_ratio_20, volume_zscore_20 from public.daily_returns "
-        "where instrument_id = %s and trade_date = %s",
-        [instrument_id, ref_date],
+        "select trade_date, volume_ratio_20, volume_zscore_20 from public.daily_returns "
+        "where instrument_id = %s",
+        [instrument_id],
     )
-    volume_ratio = float(rows[0]["volume_ratio_20"]) if rows and rows[0]["volume_ratio_20"] is not None else None
-    volume_zscore = float(rows[0]["volume_zscore_20"]) if rows and rows[0]["volume_zscore_20"] is not None else None
+    return {r["trade_date"]: r for r in rows}
 
-    returns_series = _returns_series(instrument_id)
+
+def _volume_and_volatility(
+    volume_row: dict[str, Any] | None, ref_date: date, calendar: _CalendarIndex, returns_series: dict[date, float]
+) -> dict[str, float | None]:
+    """``volume_row`` vem de ``_volume_stats_series`` (D0 do evento, ja em
+    memoria). Volatilidade pre/pos e o desvio padrao dos retornos diarios
+    nos 20 pregoes antes/depois do evento (fase1.md 60) -- ``returns_series``
+    tambem ja vem pronto do chamador, mesma serie usada pro market model
+    (antes esta funcao refazia o fetch inteiro a cada chamada)."""
+    volume_ratio = float(volume_row["volume_ratio_20"]) if volume_row and volume_row.get("volume_ratio_20") is not None else None
+    volume_zscore = float(volume_row["volume_zscore_20"]) if volume_row and volume_row.get("volume_zscore_20") is not None else None
+
     ref_index = calendar.index_of(ref_date)
     pre_vals, post_vals = [], []
     if ref_index is not None:
