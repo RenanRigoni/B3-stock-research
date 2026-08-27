@@ -412,3 +412,44 @@ comprovadamente correta (point-in-time, idempotência, zero look-ahead em amostr
 agora também comprovadamente **escalável** ao volume real de produção, não só ao volume de
 teste — os cinco bugs de escala documentados acima só existiam porque nunca tinham sido
 exercitados contra dezenas de milhares de linhas antes desta etapa.
+
+---
+
+## Fase 2 — motor de valuation e qualidade (em andamento, 2026-08-27)
+
+Plano completo em [`docs/fase2_plan.md`](fase2_plan.md). Ordem de execução: bloco a bloco,
+com validação contra dados reais antes de cada parser. Estado nesta data:
+
+| § | Bloco | Migration | CLI | Status |
+|---|---|---|---|---|
+| 19 | Entidade `companies`/issuer (separada de `instrument`) | `20260827000001` | — | **concluído** — FK aditiva em instruments/cvm_documents/financial_statement_facts/fundamental_metrics; PETR3/ITUB3 cadastrados inativos |
+| 3 | `share_count_history` + ingestão CVM FRE | `20260827000003` | `sync-fre` | **concluído** — 2010→2026, quantidade de ações por classe, point-in-time; bate exato com os números do §13.1 |
+| 22 | Validação de contas D&A / imposto no DFP/ITR real | — | — | **concluído** — contas confirmadas contra 248k fatos (fase2_plan §28-29) |
+| 6-7 | EBITDA, alíquota efetiva, NOPAT, capital investido, ROIC | — | `compute-metrics` | **concluído** — grava em `fundamental_metrics` (`valuation_metrics_v1`); bancos → `sector_inadequate` |
+| 4-5 | Market cap por companhia + múltiplos (base FY) | `20260827000004` | `compute-multiples` | **concluído** — `valuation_multiples`; TTM (`basis='ttm'`) fica para incremento futuro |
+| 8/17 | Quality Score não-financeiro (0-100) | `20260827000005` | `compute-quality` | **concluído** — `quality_scores`, bandas em `config/quality_nonfinancial_v1.yaml`, `calibration_status='provisional'`; bancos → `incomplete` por desenho |
+
+**Reclamação de espaço** (`20260827000002`): org Supabase no Free Plan estava acima da cota
+de Database Size; `VACUUM FULL` nas tabelas de notícias + drop de índice prematuro levou
+896 MB → ~525 MB.
+
+### Falta na Fase 2
+
+- **TTM** — completa o §5 (EBITDA/FCF trimestral isolado por subtração YTD + testes de
+  look-ahead do caminho TTM).
+- **DCF (§10)** — pipeline macro novo (risk-free Tesouro Prefixado §21.2 + ERP Damodaran
+  §21.4), WACC, projeção 5 anos, terminal value, cenários, margem de segurança; tabelas
+  `risk_free_assumptions`, `equity_risk_premium_assumptions`, `valuation_snapshots`.
+- **`quality_bank_v1`** — permanece `incomplete` por desenho até haver fonte de
+  NIM/eficiência/Basileia/inadimplência (§9/§18).
+
+### Achados/bugs desta etapa (detalhe em `fase2_plan.md` §24-33)
+
+1. Campo `*_Circulacao` da FRE é **free float**, não "emitidas − tesouraria" — denominador
+   de market cap é `shares_issued` (Capital Integralizado).
+2. `share_class` da VALE3 estava gravado como `"true"` desde a Fase 1 — `ON` em YAML 1.1 é
+   booleano. Corrigido (aspas em `companies.yaml` + `init`).
+3. `detect_encoding` só amostrava 8 KB — quebrava em byte cp1252 tardio nos CSVs da FRE.
+   Novo `detect_encoding_full` (lê o arquivo inteiro; só para arquivos pequenos).
+4. `= any(%s)` com lista Python não funciona no backend REST (`exec_sql` RPC) — usar
+   `in (%s, %s)` explícito.

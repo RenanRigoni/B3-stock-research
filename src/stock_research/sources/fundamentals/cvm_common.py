@@ -59,18 +59,33 @@ STATEMENT_CODES = ("BPA", "BPP", "DRE", "DRA", "DFC_MD", "DFC_MI", "DVA")
 # (fase1.md 45: "o codigo deve tolerar colunas novas, ordem diferente").
 REQUIRED_COLUMNS_METADATA = {"CNPJ_CIA", "DT_REFER", "VERSAO", "DENOM_CIA", "CD_CVM", "DT_RECEB"}
 REQUIRED_COLUMNS_STATEMENT = {
-    "CNPJ_CIA", "DT_REFER", "VERSAO", "DENOM_CIA", "CD_CVM", "GRUPO_DFP",
-    "MOEDA", "ESCALA_MOEDA", "ORDEM_EXERC", "DT_FIM_EXERC", "CD_CONTA", "DS_CONTA", "VL_CONTA",
+    "CNPJ_CIA",
+    "DT_REFER",
+    "VERSAO",
+    "DENOM_CIA",
+    "CD_CVM",
+    "GRUPO_DFP",
+    "MOEDA",
+    "ESCALA_MOEDA",
+    "ORDEM_EXERC",
+    "DT_FIM_EXERC",
+    "CD_CONTA",
+    "DS_CONTA",
+    "VL_CONTA",
 }
 REQUIRED_COLUMNS_REGISTRY = {"CNPJ_CIA", "DENOM_SOCIAL", "CD_CVM", "SIT"}
 
 # ``dfp_cia_aberta_DRE_con_2024.csv`` -> doc_type=dfp, statement=DRE, consolidado=True, ano=2024.
 # ``dfp_cia_aberta_2024.csv`` (sem infixo de demonstracao) -> arquivo de metadados.
 _STATEMENT_FILENAME_RE = re.compile(
-    r"^(?P<doc>dfp|itr)_cia_aberta_(?P<stmt>" + "|".join(STATEMENT_CODES) + r")_(?P<con>con|ind)_(?P<year>\d{4})\.csv$",
+    r"^(?P<doc>dfp|itr)_cia_aberta_(?P<stmt>"
+    + "|".join(STATEMENT_CODES)
+    + r")_(?P<con>con|ind)_(?P<year>\d{4})\.csv$",
     re.IGNORECASE,
 )
-_METADATA_FILENAME_RE = re.compile(r"^(?P<doc>dfp|itr)_cia_aberta_(?P<year>\d{4})\.csv$", re.IGNORECASE)
+_METADATA_FILENAME_RE = re.compile(
+    r"^(?P<doc>dfp|itr)_cia_aberta_(?P<year>\d{4})\.csv$", re.IGNORECASE
+)
 
 
 @dataclass(frozen=True)
@@ -217,8 +232,42 @@ def sniff_zip_member(zf: zipfile.ZipFile, member_name: str) -> tuple[str, str, l
     return encoding, delimiter, columns
 
 
-def iter_csv_rows(zf: zipfile.ZipFile, member_name: str) -> Iterator[dict[str, Any]]:
-    """Gera dicts (uma linha por vez) sem carregar o CSV inteiro em memoria."""
+def detect_encoding_full(data: bytes) -> str:
+    """Como ``detect_encoding`` mas sobre o arquivo inteiro, nao uma amostra.
+
+    ``detect_encoding`` so olha 8 KB: um CSV cujo cabecalho + primeiras linhas
+    sao ASCII (comum na FRE) vira utf-8 por engano e quebra ao achar um byte
+    latin-1 (ex.: ``0xC9`` = "E" acentuado) mais adiante. cp1252 mapeia
+    praticamente todos os 256 bytes, entao "utf-8 estrito no arquivo todo,
+    senao cp1252" e uma deteccao correta -- ao custo de uma passada extra,
+    aceitavel so em arquivos pequenos (a FRE tem; DFP/ITR de demonstracao nao).
+    """
+    try:
+        data.decode("utf-8", errors="strict")
+        return "utf-8"
+    except UnicodeDecodeError:
+        return "cp1252"
+
+
+def iter_csv_rows(
+    zf: zipfile.ZipFile, member_name: str, *, full_scan_encoding: bool = False
+) -> Iterator[dict[str, Any]]:
+    """Gera dicts (uma linha por vez) sem carregar o CSV inteiro em memoria.
+
+    ``full_scan_encoding=True`` decide o encoding lendo o membro inteiro (ver
+    ``detect_encoding_full``) em vez da amostra de 8 KB -- so para arquivos
+    pequenos (FRE). O streaming linha a linha continua igual depois disso.
+    """
+    if full_scan_encoding:
+        with zf.open(member_name, "r") as raw:
+            payload = raw.read()
+        encoding = detect_encoding_full(payload)
+        _, delimiter, _ = sniff_zip_member(zf, member_name)
+        reader = csv.DictReader(
+            io.StringIO(payload.decode(encoding, errors="replace")), delimiter=delimiter
+        )
+        yield from reader
+        return
     encoding, delimiter, _ = sniff_zip_member(zf, member_name)
     with open_zip_member_text(zf, member_name, encoding) as fh:
         reader = csv.DictReader(fh, delimiter=delimiter)
@@ -246,7 +295,9 @@ def iter_csv_rows_from_path(path: Path) -> Iterator[dict[str, Any]]:
         yield from reader
 
 
-def load_metadata_index(zf: zipfile.ZipFile, member_name: str) -> dict[tuple[str, str, str], dict[str, Any]]:
+def load_metadata_index(
+    zf: zipfile.ZipFile, member_name: str
+) -> dict[tuple[str, str, str], dict[str, Any]]:
     """Le o arquivo de metadados (pequeno, cabe em memoria) e indexa por
     ``(cnpj, dt_refer, versao)`` -- a chave que liga cada linha de conta ao
     documento (``DT_RECEB``) que a originou.

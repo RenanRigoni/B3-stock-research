@@ -18,7 +18,8 @@ esse arquivo é a fonte da verdade. Este documento é um mapa de navegação, n�
 
 | Tabela | Papel |
 |---|---|
-| `instruments` | Cadastro mestre. `ticker` **não** é identificador eterno — toda FK usa `instrument_id`. |
+| `instruments` | Cadastro mestre. `ticker` **não** é identificador eterno — toda FK usa `instrument_id`. `company_id` (FK nullable) liga o ticker à companhia emissora. |
+| `companies` | Entidade emissora (empresa legal, chave natural = CNPJ). Uma companhia tem 1+ instrumentos (PETR3 + PETR4). Fundamentos e valuation da Fase 2 agregam por `company_id`, nunca por `instrument_id` (fase2_plan.md §4/§19). |
 | `ticker_aliases` | Tickers históricos (evita survivorship bias quando um código muda de dono). |
 | `company_aliases` | Termos de busca de notícias por empresa. `is_strong` distingue alias inequívoco ("Petrobras") de ambíguo ("Vale" isolado). |
 | `trading_calendar` | Calendário de pregões derivado do benchmark. `trading_day_index` é a base de toda aritmética D+N. |
@@ -45,9 +46,12 @@ esse arquivo é a fonte da verdade. Este documento é um mapa de navegação, n�
 
 | Tabela | Papel |
 |---|---|
-| `cvm_documents` | Cabeçalho de cada documento CVM (DFP/ITR), com `available_from` — a base do point-in-time. |
-| `financial_statement_facts` | Fatos contábeis como reportados, `account_code` preservado, todas as versões/reapresentações. |
-| `fundamental_metrics` | Métricas derivadas (revenue, net_income, ROE, ...), com `quality_flag` (`ok`/`missing_input`/`sector_inadequate`/...). |
+| `cvm_documents` | Cabeçalho de cada documento CVM (DFP/ITR), com `available_from` — a base do point-in-time. `company_id` (FK nullable) em paralelo ao `instrument_id`. |
+| `financial_statement_facts` | Fatos contábeis como reportados, `account_code` preservado, todas as versões/reapresentações. `company_id` (FK nullable) em paralelo ao `instrument_id`. |
+| `fundamental_metrics` | Métricas derivadas, com `quality_flag` e `calculation_version`. `fundamental_metrics_v1` = base (Fase 1: revenue, net_income, ROE, ebit, ...). `valuation_metrics_v1` = Fase 2 (`da`, `ebitda`, `pretax_income`, `income_tax`, `effective_tax_rate`, `nopat`, `invested_capital`, `roic`) — bancos recebem `sector_inadequate` em ebitda/nopat/invested_capital/roic. `company_id` (FK nullable) para agregação. |
+| `share_count_history` | Quantidade de ações por companhia/classe (ON/PN/TOTAL), point-in-time, da CVM FRE. `shares_issued` (Capital Integralizado) é o denominador de market cap; `free_float_shares` é free float (≠ emitidas−tesouraria); `treasury_shares`/`shares_outstanding` tipicamente NULL (FRE não traz consistente). `version` na chave → reapresentações preservadas. Ver `fase2_plan.md` §3/§24. |
+| `valuation_multiples` | Market cap agregado por companhia (`Σ close_classe × shares_issued_classe`, point-in-time) + múltiplos (P/L, EV/EBITDA, FCF yield, earnings yield, P/VP, dividend yield). `basis='fy'` na V1 (`ttm` reservado). `price_inputs` (jsonb) preserva preço/qtd de cada classe. Bancos: `ev_ebitda`/`fcf_yield` NULL. Ver `fase2_plan.md` §4-5/§30. |
+| `quality_scores` | Score de qualidade 0-100 por companhia (`quality_nonfinancial_v1`), **independente de preço**. `score_status` (`ok`/`incomplete`), `calibration_status='provisional'` sempre na V1, `components` (jsonb) com o detalhamento por bloco/subitem. Bancos → `incomplete` por desenho. Bandas em `config/quality_nonfinancial_v1.yaml`. Ver `fase2_plan.md` §8/§17. |
 
 **Consulta point-in-time correta:** sempre via `get_fundamentals_as_of(instrument_id, date)`
 (`analytics/fundamentals.py`), nunca filtrando `reference_date <= date` diretamente — ver
