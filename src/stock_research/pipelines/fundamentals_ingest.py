@@ -51,9 +51,18 @@ FACT_UPDATE_COLUMNS = [
 
 def target_instruments() -> dict[str, dict[str, Any]]:
     """``cnpj -> {instrument_id, ticker, cvm_code}`` para as empresas ja
-    resolvidas em ``instruments`` (via ``sync_company_registry``)."""
+    resolvidas em ``instruments`` (via ``sync_company_registry``).
+
+    Filtra ``active = true``: a partir da Fase 2 uma companhia pode ter mais de
+    um instrumento com o mesmo CNPJ (PETR3 + PETR4). Fundamentos sao um fato da
+    companhia, nao do ticker -- ingerir por instrumento nao-primario atribuiria
+    os fatos a um ``instrument_id`` que ``get_fundamentals_as_of`` nao consulta
+    (fase2_plan.md 13.4). As classes secundarias entram inativas justamente por
+    isso; a agregacao por ``company_id`` vem no bloco de market cap.
+    """
     rows = fetch_all(
-        "select instrument_id, ticker, cnpj, cvm_code from public.instruments where cnpj is not null"
+        "select instrument_id, ticker, cnpj, cvm_code from public.instruments "
+        "where cnpj is not null and active = true"
     )
     return {r["cnpj"]: r for r in rows}
 

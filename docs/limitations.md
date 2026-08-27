@@ -60,6 +60,35 @@ que os dados **não** conseguem sustentar é parte do produto, não uma ressalva
   resolver valuation setorial.
 - **Conta ausente vira `NULL` + motivo.** Nunca um zero ou uma estimativa silenciosa.
 
+## Valuation e DCF
+
+- **`margin_of_safety` não é recomendação.** É `(fair_value − preço) / fair_value`, um
+  número para o usuário olhar. O sistema não diz "compre" nem "venda".
+- **Premissa nunca sai `quality_flag='ok'`.** ΔWC assumido 0 por falta de capital de giro,
+  capex de linha combinada, custo de dívida no piso do risk-free, `payout_ratio` default no
+  Residual Income — tudo degrada o snapshot para `estimated`, com o `quality_reason`
+  nomeando a premissa (`fase2_plan.md` §36).
+- **`cost_of_debt` da V1 é custo marginal ESTIMADO por proxy contábil.** A despesa
+  financeira da DRE (`3.06.02.01`, ou o nível 2 como fallback) sobre a dívida bruta mede
+  **custo histórico / embedded** — o juro dos contratos já existentes — e **não**
+  necessariamente o custo corrente de captar dívida nova. Para PETR4 e VALE3 essa proxy dá
+  ~6-8% (dívida legada barata), abaixo do risk-free de ~12,4%, então o piso do soberano
+  prevalece e `company_credit_spread = 0`. O DCF de não-financeira sai `estimated` enquanto
+  for essa proxy. Além disso, empresas declaram a conta de juros puros de forma
+  inconsistente: a VALE3 preenche `3.06.02.01` com **zero** e só reporta o nível 2 (tratado
+  como ausente, nunca como juro zero).
+  - **Evolução futura (não implementada):** hierarquia de fontes para o spread de crédito,
+    da melhor para a pior — **bond/emission spread** (spread observado das emissões da
+    própria empresa) → **CDS** (credit default swap, quando houver liquidez) → **synthetic
+    credit spread** (rating sintético a partir de cobertura de juros, à la Damodaran) →
+    **accounting proxy** (o atual). Cada nível grava a fonte e degrada a qualidade conforme
+    desce.
+- **`terminal_growth` é único para todas as empresas** (nominal, do config). Não há
+  diferenciação por maturidade de setor ou exposição a commodity.
+- **Beta é histórico** (regressão semanal vs. IBOV), sem ajuste Blume nem beta setorial.
+- **Bancos usam RI + DDM, não FCFF.** `payout_ratio` observado quando há `dividends_ttm` e
+  lucro positivo; caso contrário assume 0,5 e marca `estimated`.
+
 ## Event study
 
 - **Correlação temporal não prova causalidade.** O sistema diz "o evento foi seguido de
@@ -89,10 +118,16 @@ que os dados **não** conseguem sustentar é parte do produto, não uma ressalva
 - **Projeto pessoal.** Sem alta disponibilidade, sem replicação, sem SLA. Backup é
   responsabilidade manual.
 
-## O que esta fase deliberadamente não faz
+## O que estas fases deliberadamente não fazem
 
-Recomendação de compra ou venda, preço-alvo, DCF, margem de segurança, score de
-atratividade, carteira, integração com corretora, previsão de preço.
+Recomendação de compra ou venda, preço-alvo como conselho, score de atratividade,
+carteira, integração com corretora, previsão de preço.
 
-Isso não é escopo pendente — é escopo **recusado** nesta fase. A base precisa estar
-comprovadamente correta antes de qualquer conclusão ser construída sobre ela.
+Isso não é escopo pendente — é escopo **recusado**. A base precisa estar comprovadamente
+correta antes de qualquer conclusão ser construída sobre ela.
+
+> **Nota sobre DCF e margem de segurança.** A Fase 1 recusava esses cálculos. A Fase 2 os
+> introduziu (`valuation_snapshots`, `compute-dcf`), mas como **números para o usuário
+> olhar, com qualidade rastreável** — nunca como recomendação. Todo snapshot carrega
+> `quality_flag` + `quality_reason`; premissa jamais vira `ok`. Ver a seção
+> "Valuation e DCF" acima.

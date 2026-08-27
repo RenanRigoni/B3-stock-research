@@ -19,7 +19,9 @@ companies:
     yahoo_symbol: PETR4.SA
     company_name: Petrobras
     legal_name: PETROLEO BRASILEIRO S.A. PETROBRAS
-    share_class: PN
+    # Aspas obrigatorias: YAML 1.1 le ON/OFF/YES/NO como booleano (VALE3 ja foi
+    # mordida por isso -- `share_class: ON` virava a string "true").
+    share_class: "PN"
     sector: Petroleo, Gas e Biocombustiveis
     aliases:
       strong:
@@ -39,7 +41,7 @@ companies:
     yahoo_symbol: VALE3.SA
     company_name: Vale
     legal_name: VALE S.A.
-    share_class: ON
+    share_class: "ON"
     sector: Materiais Basicos
     aliases:
       strong:
@@ -59,7 +61,7 @@ companies:
     yahoo_symbol: ITUB4.SA
     company_name: Itau Unibanco
     legal_name: ITAU UNIBANCO HOLDING S.A.
-    share_class: PN
+    share_class: "PN"
     sector: Financeiro
     aliases:
       strong:

@@ -1,0 +1,39 @@
+# Equity Risk Premium -- Brasil. Snapshots CURADOS MANUALMENTE (fase2_plan.md
+# 16.2, 16.4, 21.4). Não é pipeline automatizado: os datasets de país da
+# Damodaran (NYU Stern) são planilhas atualizadas ~1x/ano pelo autor, sem API
+# nem série histórica pronta. Cada snapshot aqui é uma linha da planilha
+# `ctryprem.xlsx` (aba "Regional breakdown", country = Brazil), transcrita à mão.
+#
+# Disciplina point-in-time (§21.4): o WACC de um `as_of_date` usa o snapshot
+# mais recente cujo `available_from` já era <= as_of_date. NUNCA um snapshot
+# publicado depois.
+#
+# Componentes (todos do MESMO snapshot, nunca misturar):
+#   mature_market_erp          -- ERP do mercado maduro de referência (EUA)
+#   country_default_spread     -- spread de inadimplência soberana ajustado
+#   country_risk_premium       -- prêmio de risco-país (default_spread escalado
+#                                 pela volatilidade relativa ações/títulos)
+#   total_equity_risk_premium  -- mature_market_erp + country_risk_premium
+#
+# ATENÇÃO: só há UM snapshot aqui (jan/2026). Valuation com `as_of_date`
+# anterior a 2026-02-16 fica sem ERP -> quality_flag='missing_input'. Backfill
+# histórico exige transcrever os arquivos arquivados da Damodaran (não há
+# download automatizado confiável -- ver §16.2).
+
+version: erp_snapshots_v1
+country: Brazil
+source: "Aswath Damodaran (NYU Stern) -- ctryprem.xlsx, aba 'Regional breakdown'"
+
+snapshots:
+  - snapshot_date: 2026-01-01           # data de referência do dataset (update anual)
+    available_from: 2026-02-16           # publicação (conservador -- nota 'Updated Feb' na planilha)
+    mature_market_erp: 0.0423
+    country_default_spread: 0.021275
+    country_risk_premium: 0.032410
+    total_equity_risk_premium: 0.074710
+    moodys_rating: Ba1
+    notes: >
+      Transcrito de ctryprem.xlsx baixado em 2026-08-27. Adj. Default Spread
+      2,1275%; Equity Risk Premium 7,4710%; Country Risk Premium 3,2410%;
+      mature_market_erp derivado = total - CRP = 4,23% (bate com o "US equity
+      risk premium" da aba "ERPs by country").

@@ -1,0 +1,54 @@
+# WACC + DCF -- premissas versionadas (fase2_plan.md 10, 21). Fora do código.
+#
+# DCF V1 é NOMINAL em BRL (§21.1): fluxos, WACC e terminal_growth todos
+# nominais. Nenhuma mistura de fluxo real com taxa nominal.
+
+version: wacc_v1
+
+risk_free:
+  # Fonte: Tesouro Prefixado (Tesouro Transparente), regra determinística de
+  # maturidade (§21.2). Alvo ~10 anos; escolhe a linha com |maturidade - 10|
+  # mínima no `as_of_date` (ou último pregão <= as_of).
+  target_maturity_years: 10
+  bid_ask: midpoint            # média entre Taxa Compra Manha e Taxa Venda Manha
+  # risk_free_nominal_brl = government_bond_yield_brl - brazil_default_spread
+  # (§21.2 / §21.6 -- título soberano em BRL não é literalmente livre de risco).
+  subtract_country_default_spread: true
+
+beta:
+  # Regressão de daily_returns (ajustado) da empresa vs. IBOV.
+  benchmark_ticker: IBOV
+  frequency: weekly           # retornos semanais reduzem ruído de microestrutura
+  window_years: 5
+  min_observations: 104       # ~2 anos de semanas
+  # Beta bruto; sem ajuste de Blume/Bloomberg na V1 (documentado).
+  adjustment: none
+
+cost_of_debt:
+  # Aproximação: despesa financeira / dívida bruta média. Sobre o título
+  # público (que já embute risco soberano) -- NÃO sobre um "livre de risco
+  # global" (§21.6, para não contar risco-Brasil de novo).
+  method: financial_expense_over_gross_debt
+  # Piso/teto de sanidade (evita número absurdo por dívida perto de zero).
+  floor: 0.04
+  cap: 0.30
+
+wacc:
+  # equity_weight / debt_weight por valor de mercado do equity (market cap) e
+  # valor contábil da dívida bruta (proxy -- V1).
+  weights: market_equity_book_debt
+
+dcf:
+  forecast_years: 5
+  terminal_method: gordon_growth
+  # terminal_growth nominal: inflação de longo prazo + crescimento real modesto.
+  # V1 usa um valor fixo; refinar por empresa é trabalho futuro.
+  terminal_growth_nominal: 0.045
+  # Crescimento de FCFF na janela explícita, por cenário. V1: sobre o FCFF TTM
+  # mais recente (fase2_plan.md 5 -- TTM é o ponto de partida).
+  scenarios:
+    pessimista: {forecast_growth: 0.00}
+    base:       {forecast_growth: 0.04}
+    otimista:   {forecast_growth: 0.08}
+  # Margem de segurança = (fair_value - market_price) / fair_value. NÃO vira
+  # recomendação automática de compra/venda (§11).

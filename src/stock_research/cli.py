@@ -130,7 +130,8 @@ def doctor() -> None:
 @app.command()
 def init(
     load_universe: Annotated[
-        bool, typer.Option("--load-universe/--no-load-universe", help="Carrega companies.yaml no banco.")
+        bool,
+        typer.Option("--load-universe/--no-load-universe", help="Carrega companies.yaml no banco."),
     ] = True,
 ) -> None:
     """Cria a arvore de dados local e carrega o universo de instrumentos."""
@@ -193,7 +194,9 @@ def sync_prices(
 
     from stock_research.pipelines.prices import sync_prices as run_sync_prices
 
-    result = run_sync_prices(ticker=ticker, all_tickers=all_tickers, start=start, end=end, force=force)
+    result = run_sync_prices(
+        ticker=ticker, all_tickers=all_tickers, start=start, end=end, force=force
+    )
     _print_pipeline_summary(result, "sync-prices")
     if result["failed"]:
         raise typer.Exit(code=1)
@@ -234,7 +237,9 @@ def validate_prices(
 def sync_cvm(
     year: Annotated[int | None, typer.Option("--year")] = None,
     from_year: Annotated[int | None, typer.Option("--from-year")] = None,
-    registry: Annotated[bool, typer.Option("--registry", help="So o cadastro de companhias.")] = False,
+    registry: Annotated[
+        bool, typer.Option("--registry", help="So o cadastro de companhias.")
+    ] = False,
 ) -> None:
     """Download e ingestao de DFP/ITR da CVM (fase1.md 42-46)."""
     if registry:
@@ -266,6 +271,33 @@ def sync_cvm(
             detail = (
                 f"{outcome.get('documents', 0)} documento(s), {outcome.get('facts', 0)} fato(s), "
                 f"{outcome.get('skipped_rows', 0)} linha(s) descartada(s)"
+            )
+            table.add_row(key, "[green]OK[/]", detail)
+    console.print(table)
+    if result["failed"]:
+        raise typer.Exit(code=1)
+
+
+@app.command(name="sync-fre")
+def sync_fre(
+    year: Annotated[int | None, typer.Option("--year")] = None,
+    from_year: Annotated[int | None, typer.Option("--from-year")] = None,
+) -> None:
+    """Download e ingestao da CVM FRE -> quantidade historica de acoes (fase2_plan.md 3)."""
+    from stock_research.pipelines.share_count import sync_fre as run_sync_fre
+
+    result = run_sync_fre(year=year, from_year=from_year)
+    table = Table(title="sync-fre", show_header=True, header_style="bold")
+    for col in ("Ano", "Status", "Detalhe"):
+        table.add_column(col)
+    for key, outcome in result["results"].items():
+        if outcome.get("status") == "failed":
+            table.add_row(key, "[red]FALHOU[/]", str(outcome.get("error", "")))
+        else:
+            detail = (
+                f"{outcome.get('documents', 0)} documento(s), "
+                f"{outcome.get('share_counts', 0)} linha(s) de acoes, "
+                f"{outcome.get('warnings', 0)} aviso(s)"
             )
             table.add_row(key, "[green]OK[/]", detail)
     console.print(table)
@@ -367,6 +399,194 @@ def build_events(
     )
 
 
+@app.command(name="compute-metrics")
+def compute_metrics(
+    ticker: Annotated[str | None, typer.Argument()] = None,
+) -> None:
+    """Recalcula fundamental_metrics: base (Fase 1) + valuation (Fase 2, EBITDA/ROIC).
+
+    Sem ticker: todas as empresas ativas. Idempotente (upsert por chave natural).
+    """
+    from stock_research.analytics.fundamentals_metrics import compute_and_store_metrics
+    from stock_research.analytics.valuation_metrics import compute_and_store_valuation_metrics
+    from stock_research.db import fetch_all as _fetch_all
+
+    if ticker:
+        tickers = [ticker.upper()]
+    else:
+        tickers = [
+            r["ticker"]
+            for r in _fetch_all(
+                "select ticker from public.instruments "
+                "where active = true and is_benchmark = false and cnpj is not null order by ticker"
+            )
+        ]
+
+    table = Table(title="compute-metrics", show_header=True, header_style="bold")
+    for col in ("Ticker", "Base", "Valuation"):
+        table.add_column(col)
+    failed = False
+    for tk in tickers:
+        try:
+            base = compute_and_store_metrics(tk)
+            val = compute_and_store_valuation_metrics(tk)
+            table.add_row(tk, f"[green]{base['total']}[/]", f"[green]{val['total']}[/]")
+        except Exception as exc:  # uma empresa nao aborta as outras
+            failed = True
+            table.add_row(tk, "[red]FALHOU[/]", str(exc)[:60])
+    console.print(table)
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command(name="compute-multiples")
+def compute_multiples_cmd(
+    company: Annotated[str | None, typer.Argument(help="ticker, CNPJ ou vazio p/ todas")] = None,
+    as_of: Annotated[str | None, typer.Option("--as-of", help="AAAA-MM-DD, default hoje")] = None,
+    basis: Annotated[str, typer.Option("--basis", help="fy | ttm | both")] = "both",
+) -> None:
+    """Market cap por companhia + múltiplos point-in-time (FY e/ou TTM) -- fase2_plan.md 4-5."""
+    from datetime import date as _date
+
+    from stock_research.analytics.valuation_multiples import compute_and_store_multiples
+    from stock_research.db import fetch_all as _fetch_all
+
+    as_of_date = _date.fromisoformat(as_of) if as_of else _date.today()
+    bases = ["fy", "ttm"] if basis == "both" else [basis]
+    if company:
+        refs: list[Any] = [company]
+    else:
+        refs = [
+            r["company_id"]
+            for r in _fetch_all("select company_id from public.companies order by company_id")
+        ]
+
+    table = Table(title=f"compute-multiples ({as_of_date})", show_header=True, header_style="bold")
+    for col in ("Companhia", "Base", "Market cap", "P/L", "EV/EBITDA", "P/VP", "DY", "Flag"):
+        table.add_column(col)
+    failed = False
+    for ref in refs:
+        for b in bases:
+            try:
+                r = compute_and_store_multiples(ref, as_of=as_of_date, basis=b)
+                mc = f"{float(r['market_cap']) / 1e9:.1f}B" if r["market_cap"] is not None else "--"
+                pe = (
+                    f"{float(r['price_earnings']):.1f}" if r["price_earnings"] is not None else "--"
+                )
+                ev = f"{float(r['ev_ebitda']):.1f}" if r["ev_ebitda"] is not None else "--"
+                pb = f"{float(r['price_book']):.2f}" if r["price_book"] is not None else "--"
+                dy = (
+                    f"{float(r['dividend_yield']) * 100:.1f}%"
+                    if r["dividend_yield"] is not None
+                    else "--"
+                )
+                table.add_row(str(ref), b, mc, pe, ev, pb, dy, r["quality_flag"])
+            except Exception as exc:  # uma companhia nao aborta as outras
+                failed = True
+                table.add_row(str(ref), b, "[red]FALHOU[/]", "", "", "", "", str(exc)[:40])
+    console.print(table)
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command(name="compute-quality")
+def compute_quality_cmd(
+    ticker: Annotated[str | None, typer.Argument()] = None,
+    as_of: Annotated[str | None, typer.Option("--as-of", help="AAAA-MM-DD, default hoje")] = None,
+) -> None:
+    """Quality Score não-financeiro (0-100), independente de preço -- fase2_plan.md 8, 17."""
+    from datetime import date as _date
+
+    from stock_research.analytics.quality_score import compute_and_store_quality_score
+    from stock_research.db import fetch_all as _fetch_all
+
+    as_of_date = _date.fromisoformat(as_of) if as_of else _date.today()
+    if ticker:
+        tickers = [ticker.upper()]
+    else:
+        tickers = [
+            r["ticker"]
+            for r in _fetch_all(
+                "select ticker from public.instruments "
+                "where active = true and is_benchmark = false and cnpj is not null order by ticker"
+            )
+        ]
+
+    table = Table(title=f"compute-quality ({as_of_date})", show_header=True, header_style="bold")
+    for col in ("Ticker", "Score", "Status", "Anos", "Peso", "Calibração"):
+        table.add_column(col)
+    failed = False
+    for tk in tickers:
+        try:
+            r = compute_and_store_quality_score(tk, as_of=as_of_date)
+            score = f"{float(r['score']):.1f}" if r["score"] is not None else "--"
+            table.add_row(
+                tk,
+                score,
+                r["score_status"],
+                str(r["window_years"] or "--"),
+                str(r["weight_covered"] or "--"),
+                r["calibration_status"],
+            )
+        except Exception as exc:  # uma empresa nao aborta as outras
+            failed = True
+            table.add_row(tk, "[red]FALHOU[/]", str(exc)[:50], "", "", "")
+    console.print(table)
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command(name="compute-dcf")
+def compute_dcf_cmd(
+    company: Annotated[str | None, typer.Argument(help="ticker/CNPJ ou vazio p/ todas")] = None,
+    as_of: Annotated[str | None, typer.Option("--as-of", help="AAAA-MM-DD, default hoje")] = None,
+) -> None:
+    """DCF FCFF (só não-financeiras) + WACC + cenários + margem de segurança -- fase2_plan.md 10."""
+    from datetime import date as _date
+
+    from stock_research.pipelines.valuation_dcf import compute_and_store_dcf, run_dcf
+
+    as_of_date = _date.fromisoformat(as_of) if as_of else _date.today()
+    if company:
+        outcomes = {company: compute_and_store_dcf(company, as_of=as_of_date)}
+        failed = []
+    else:
+        res = run_dcf(as_of=as_of_date)
+        outcomes, failed = res["results"], res["failed"]
+
+    table = Table(title=f"compute-dcf ({as_of_date})", show_header=True, header_style="bold")
+    for col in ("Companhia", "Método", "WACC/coe", "FCFF ini", "Fair (base)", "MoS (base)", "Flag"):
+        table.add_column(col)
+    for ref, o in outcomes.items():
+        if o.get("status") == "failed":
+            table.add_row(str(ref), "", "[red]FALHOU[/]", "", "", "", str(o.get("error", ""))[:40])
+            continue
+        method = "residual_income+ddm" if o.get("status") == "bank" else "fcff"
+        rate = o.get("wacc") if o.get("wacc") is not None else o.get("cost_of_equity")
+        w = f"{float(rate) * 100:.1f}%" if rate is not None else "--"
+        fc = f"{float(o['fcff_start']) / 1e9:.1f}B" if o.get("fcff_start") is not None else "--"
+        fv = (
+            f"R${float(o['fair_value_base']):.2f}" if o.get("fair_value_base") is not None else "--"
+        )
+        mos = (
+            f"{float(o['margin_of_safety_base']) * 100:.0f}%"
+            if o.get("margin_of_safety_base") is not None
+            else "--"
+        )
+        table.add_row(
+            str(ref),
+            method,
+            w,
+            fc,
+            fv,
+            mos,
+            str(o.get("quality_flag") or o.get("status") or ""),
+        )
+    console.print(table)
+    if failed:
+        raise typer.Exit(code=1)
+
+
 @app.command(name="run-event-study")
 def run_event_study(
     ticker: Annotated[str, typer.Option("--ticker")],
@@ -465,7 +685,16 @@ def status(
         raise typer.Exit(code=1)
 
     table = Table(title="Cobertura de dados", show_header=True, header_style="bold")
-    for col in ("Ticker", "Precos", "Periodo", "Acoes corp.", "Noticias", "CVM", "Eventos", "Studies"):
+    for col in (
+        "Ticker",
+        "Precos",
+        "Periodo",
+        "Acoes corp.",
+        "Noticias",
+        "CVM",
+        "Eventos",
+        "Studies",
+    ):
         table.add_column(col)
 
     for r in rows:

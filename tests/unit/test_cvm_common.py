@@ -8,6 +8,7 @@ encoding (cp1252) e separador (``;``) originais. Nao sao dados inventados.
 
 from __future__ import annotations
 
+import io
 import zipfile
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from stock_research.sources.fundamentals.cvm_common import (
     REQUIRED_COLUMNS_STATEMENT,
     detect_delimiter,
     detect_encoding,
+    detect_encoding_full,
     is_metadata_filename,
     iter_csv_rows,
     load_metadata_index,
@@ -130,15 +132,56 @@ class TestFixtureZipReal:
         with zipfile.ZipFile(DFP_ZIP) as zf:
             rows = list(iter_csv_rows(zf, "dfp_cia_aberta_BPA_con_2024.csv"))
         itub4_level1 = {
-            r["DS_CONTA"] for r in rows
-            if r["CNPJ_CIA"] == ITUB4_CNPJ and r["CD_CONTA"].count(".") == 1 and r["ORDEM_EXERC"] == "ÚLTIMO"
+            r["DS_CONTA"]
+            for r in rows
+            if r["CNPJ_CIA"] == ITUB4_CNPJ
+            and r["CD_CONTA"].count(".") == 1
+            and r["ORDEM_EXERC"] == "ÚLTIMO"
         }
         petr4_level1 = {
-            r["DS_CONTA"] for r in rows
-            if r["CNPJ_CIA"] == PETR4_CNPJ and r["CD_CONTA"].count(".") == 1 and r["ORDEM_EXERC"] == "ÚLTIMO"
+            r["DS_CONTA"]
+            for r in rows
+            if r["CNPJ_CIA"] == PETR4_CNPJ
+            and r["CD_CONTA"].count(".") == 1
+            and r["ORDEM_EXERC"] == "ÚLTIMO"
         }
         assert "Ativo Circulante" in petr4_level1
         assert "Ativo Circulante" not in itub4_level1
+
+
+class TestIterCsvRowsEncodingOverride:
+    """FRE regressao (fase2_plan.md 27): capital_social/distribuicao sao cp1252,
+    mas cabecalho + primeiras linhas ASCII enganam `detect_encoding` (so olha
+    8 KB) para utf-8, quebrando ao achar um byte latin-1 mais adiante."""
+
+    @staticmethod
+    def _zip_with_late_accent() -> io.BytesIO:
+        header = b"CNPJ_Companhia;Tipo_Capital\n"
+        ascii_filler = b"11.111.111/1111-11;Capital Emitido\n" * 260  # empurra o acento > 8 KB
+        accented = "22.222.222/2222-22;Não aplicável\n".encode("cp1252")
+        payload = header + ascii_filler + accented
+        assert len(header + ascii_filler) > 8192
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("fre_cia_aberta_capital_social_2013.csv", payload)
+        buf.seek(0)
+        return buf
+
+    def test_deteccao_padrao_quebra_no_acento_tardio(self):
+        with zipfile.ZipFile(self._zip_with_late_accent()) as zf, pytest.raises(UnicodeDecodeError):
+            list(iter_csv_rows(zf, "fre_cia_aberta_capital_social_2013.csv"))
+
+    def test_full_scan_encoding_le_cp1252_corretamente(self):
+        with zipfile.ZipFile(self._zip_with_late_accent()) as zf:
+            rows = list(
+                iter_csv_rows(zf, "fre_cia_aberta_capital_social_2013.csv", full_scan_encoding=True)
+            )
+        assert rows[-1]["Tipo_Capital"] == "Não aplicável"
+
+    def test_detect_encoding_full_utf8_vs_cp1252(self):
+        assert detect_encoding_full("preço".encode()) == "utf-8"
+        assert detect_encoding_full("preço".encode("cp1252")) == "cp1252"
+        assert detect_encoding_full(b"ascii puro") == "utf-8"
 
 
 @pytest.mark.skipif(not ITR_ZIP.exists(), reason="fixture ITR ausente")
@@ -152,7 +195,9 @@ class TestItrTrimestreIsoladoVsAcumulado:
         q3_petr4 = {
             (r["DT_INI_EXERC"], r["DT_FIM_EXERC"])
             for r in rows
-            if r["CNPJ_CIA"] == PETR4_CNPJ and r["DT_REFER"] == "2024-09-30" and r["ORDEM_EXERC"] == "ÚLTIMO"
+            if r["CNPJ_CIA"] == PETR4_CNPJ
+            and r["DT_REFER"] == "2024-09-30"
+            and r["ORDEM_EXERC"] == "ÚLTIMO"
         }
         assert ("2024-01-01", "2024-09-30") in q3_petr4  # acumulado 9M
         assert ("2024-07-01", "2024-09-30") in q3_petr4  # isolado Q3
@@ -166,6 +211,8 @@ class TestItrTrimestreIsoladoVsAcumulado:
         q3_petr4_starts = {
             r["DT_INI_EXERC"]
             for r in rows
-            if r["CNPJ_CIA"] == PETR4_CNPJ and r["DT_REFER"] == "2024-09-30" and r["ORDEM_EXERC"] == "ÚLTIMO"
+            if r["CNPJ_CIA"] == PETR4_CNPJ
+            and r["DT_REFER"] == "2024-09-30"
+            and r["ORDEM_EXERC"] == "ÚLTIMO"
         }
         assert q3_petr4_starts == {"2024-01-01"}
