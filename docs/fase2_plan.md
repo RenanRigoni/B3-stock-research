@@ -1512,12 +1512,27 @@ fair R$19-35 vs preço R$41.
 ### 34.3 `free_cash_flow` TTM da VALE3 para em 2018 (gap pré-existente da Fase 1)
 
 `fundamental_metrics` da VALE3: `free_cash_flow` **anual** = `ok` em todos os 16 anos, mas
-`ytd`/`quarterly` têm buracos pós-2018 (o mapeamento de `CAPEX_DESC` da Fase 1 não casa
-algumas linhas de `6.02.x` do DFC da VALE3 em certos trimestres). Como o TTM exige 4
-trimestres consecutivos, `free_cash_flow` TTM da VALE3 só existe até 2018-06-30. **Não
-bloqueia o DCF** (que usa FCFF anual), mas o `valuation_multiples --basis ttm` da VALE3 tem
-FCF yield stale/nulo. Corrigir o `CAPEX_DESC` para a VALE3 é trabalho da Fase 1, fora do
-escopo desta rodada.
+`capex`/`free_cash_flow` **ytd** têm 11 buracos, e o TTM exige 4 trimestres consecutivos →
+`free_cash_flow` TTM da VALE3 só vai até 2018-06-30. **Não bloqueia o DCF** (FCFF anual),
+mas o `valuation_multiples --basis ttm` da VALE3 tem FCF yield stale/nulo.
+
+**Causa exata identificada** (investigado 2026-08-27), duas coisas:
+1. **2012 Q1-Q3**: a linha de capex da VALE3 é `6.02.05 "Adilções ao imobilizado"` — **typo
+   da própria CVM** ("Adilções", não "Adições"). `_norm` não bate com `CAPEX_DESC`.
+2. **Q3 de 2018 a 2025** (só Q3): a VALE3 reporta capex como
+   `6.02.04 "Adições ao Imobilizado e investimentos"` (linha **combinada** PP&E +
+   participações), diferente do `"Adições ao Imobilizado"` que usa nos outros trimestres e
+   no anual.
+
+**Fix recomendado (Fase 1, NÃO aplicado nesta rodada)**: adicionar a `CAPEX_DESC` em
+`analytics/fundamentals_metrics.py`:
+```python
+"Adilções ao imobilizado",                  # typo da CVM, VALE3 2012
+"Adições ao Imobilizado e investimentos",    # VALE3 Q3 -- linha combinada (aceita a imprecisão)
+```
+Depois `stock-research compute-metrics VALE3` + `compute-multiples --basis ttm VALE3`. Não
+feito aqui porque muda `capex`/`free_cash_flow` já verificados e é decisão de metodologia
+da Fase 1 (a segunda entrada bundla participações no capex).
 
 ### 34.4 Cost of debt = despesa financeira / dívida bruta (com piso/teto)
 

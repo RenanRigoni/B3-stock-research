@@ -555,13 +555,15 @@ def compute_dcf_cmd(
         outcomes, failed = res["results"], res["failed"]
 
     table = Table(title=f"compute-dcf ({as_of_date})", show_header=True, header_style="bold")
-    for col in ("Companhia", "WACC", "FCFF ini", "Fair (base)", "MoS (base)", "Flag"):
+    for col in ("Companhia", "Método", "WACC/coe", "FCFF ini", "Fair (base)", "MoS (base)", "Flag"):
         table.add_column(col)
     for ref, o in outcomes.items():
         if o.get("status") == "failed":
-            table.add_row(str(ref), "[red]FALHOU[/]", "", "", "", str(o.get("error", ""))[:40])
+            table.add_row(str(ref), "", "[red]FALHOU[/]", "", "", "", str(o.get("error", ""))[:40])
             continue
-        w = f"{float(o['wacc']) * 100:.1f}%" if o.get("wacc") is not None else "--"
+        method = "residual_income+ddm" if o.get("status") == "bank" else "fcff"
+        rate = o.get("wacc") if o.get("wacc") is not None else o.get("cost_of_equity")
+        w = f"{float(rate) * 100:.1f}%" if rate is not None else "--"
         fc = f"{float(o['fcff_start']) / 1e9:.1f}B" if o.get("fcff_start") is not None else "--"
         fv = (
             f"R${float(o['fair_value_base']):.2f}" if o.get("fair_value_base") is not None else "--"
@@ -571,7 +573,15 @@ def compute_dcf_cmd(
             if o.get("margin_of_safety_base") is not None
             else "--"
         )
-        table.add_row(str(ref), w, fc, fv, mos, str(o.get("quality_flag") or o.get("status") or ""))
+        table.add_row(
+            str(ref),
+            method,
+            w,
+            fc,
+            fv,
+            mos,
+            str(o.get("quality_flag") or o.get("status") or ""),
+        )
     console.print(table)
     if failed:
         raise typer.Exit(code=1)
