@@ -203,17 +203,15 @@ e fundamentos, que são o essencial para a Fase 2, já estão completos nas trê
 
 ## Conclusão Fase 1.1
 
-> **Status: Fase 1.1 — implementação concluída; backfill histórico de notícias pendente.**
-> Operacional / aguardando conclusão da carga histórica de notícias. Todo o código,
-> schema, testes e documentação desta seção estão prontos e commitados. O que falta é
-> execução: PETR4 tem cobertura parcial (277 notícias, backfill 2017→hoje em andamento);
-> VALE3 e ITUB4 ainda em zero. **Não marcar como concluída até os três terem cobertura
-> real ou uma limitação comprovada da fonte para cada um.**
+> **Status: FASE 1.1 — CONCLUÍDA.**
+> Preços, fundamentos, notícias, dedup/relevância/classificação, eventos e event studies
+> fechados para os três tickers (PETR4, VALE3, ITUB4), com cobertura real (não estimada)
+> e limitações documentadas onde existem. Ver tabela de cobertura final abaixo.
 
 Executada a partir de `fase1.1.md`, com a ordem de execução do §49. Objetivo: profundidade
 histórica de preços, cobertura real de notícias nas 3 empresas, e fechamento definitivo da
-base antes da Fase 2. Resultado: preços e infraestrutura fechados; notícias em progresso,
-limitadas por uma restrição real e documentada da fonte, não por falha do pipeline.
+base antes da Fase 2. Resultado: preços, fundamentos e notícias fechados nas três empresas;
+limitações reais documentadas, não escondidas.
 
 ### Preços
 
@@ -283,26 +281,86 @@ puladas sem gastar chamada de rede; qualquer rejeição adicional pós-corte é 
 forma reativa e permanente (`unsupported_date_range`, nunca reprocessada em retry, ao
 contrário de rate limit/timeout/erro HTTP que são retomáveis).
 
-**Cobertura atual**: PETR4 com 277 artigos vinculados (129 herdados da Fase 1 + 148 novos
-nesta etapa, mais o que o backfill em andamento acrescentar). VALE3 e ITUB4 ainda em 0 —
-o backfill histórico para eles não tinha começado no momento deste relatório. O rate limit
-real neste ambiente provou ser severo mesmo com backoff de 60-120s entre tentativas
-isoladas (bem mais rígido que os "5s" documentados pela própria API) — um backfill de anos
-de histórico para 3 empresas é um processo de muitas horas, não minutos, e pode continuar
-depois desta sessão graças ao checkpoint.
+**Cobertura final** (backfill 2017-01-01 → hoje, os dois idiomas, checkpoint 100% resolvido
+nas três empresas — nenhuma janela pendente ou em retry):
 
-**Gaps que permanecem**: cobertura de VALE3/ITUB4 ainda não iniciada; cobertura de PETR4
-ainda não avança além de jul/2026 + a primeira semana de 2017 (backfill em andamento no
-momento deste relatório); taxa real de sucesso vs. falha por rate limit no backfill
-histórico completo ainda não medida em escala.
+| Ticker | 1ª notícia | Última notícia | Raw | Canônica | Alta relevância | Janelas backfill |
+|---|---|---|---|---|---|---|
+| PETR4 | 2017-01-04 | 2026-08-12 | 166.783 | 92.782 | 43.140 | 1015 (1005 com resultado, 5 vazias, 5 fora da cobertura do GDELT) |
+| VALE3 | 2017-01-01 | 2026-08-21 | 5.181 | 3.348 | 18 | 1011 (491 com resultado, 520 vazias) |
+| ITUB4 | 2017-01-01 | 2026-08-24 | 11.434 | 9.528 | 1.453 | 1010 (493 com resultado, 517 vazias) |
+
+O rate limit real neste ambiente provou ser severo mesmo com backoff de 60-120s entre
+tentativas isoladas (bem mais rígido que os "5s" documentados pela própria API) — o
+backfill completo das três empresas levou múltiplas sessões e reinícios, viabilizado
+executando fora da máquina local (GitHub Actions, repositório tornado público
+especificamente para não esbarrar no limite de minutos do plano gratuito em repo privado)
+depois que ficou claro que o rate limit do IP doméstico e a necessidade de manter a máquina
+ligada eram o gargalo real, não o código.
+
+**Assimetria de volume entre tickers é esperada, não um bug**: PETR4 é estatal com
+repercussão política/regulatória constante — 32x mais artigos brutos que VALE3 apesar de
+ambas cobrirem o mesmo período. Isso é sinal real de cobertura de imprensa, não uma falha
+de coleta em VALE3/ITUB4 (confirmado: os checkpoints das três estão 100% resolvidos, não há
+janela pendente que pudesse explicar a diferença).
 
 ### Eventos
 
-Reprocessados para PETR4 com a base de notícias expandida: **57 eventos, 45 confundidos
-(79%), 48 event studies**. Taxa de confounding alta é plausível (estatal com repercussão
-política/regulatória constante gera múltiplos fatos no mesmo pregão), mas não foi
-investigada a fundo — fica como ponto de atenção, não como bug confirmado. VALE3/ITUB4
-sem eventos ainda (dependem do backfill de notícias).
+Reprocessados para as três empresas com a base de notícias completa:
+
+| Ticker | Eventos | Confundidos | Event studies | Retornos calculados |
+|---|---|---|---|---|
+| PETR4 | 21.022 | 17.991 (86%) | 18.125 | 271.875 |
+| VALE3 | 18 | 2 (11%) | 15 | 225 |
+| ITUB4 | 1.124 | 539 (48%) | 869 | 13.035 |
+
+Taxa de confounding alta em PETR4 é plausível (estatal com repercussão política/
+regulatória constante gera múltiplos fatos no mesmo pregão) mas não foi investigada a
+fundo — fica como ponto de atenção, não como bug confirmado. A diferença entre `eventos`
+e `event studies` em cada ticker (PETR4: 2.897 / VALE3: 3 / ITUB4: 255) é
+`effective_trade_date` não resolvido — comportamento esperado do design (`transforms/
+events.py`), nunca um evento com data inventada.
+
+### Bugs de escala achados fechando dedup/eventos/event study em produção
+
+Os quatro pipelines finais da Fase 1.1 (`analyze-news`, `classify-news`, `build-events`,
+`run-event-study`) foram escritos e testados contra o volume da Fase 1 (dezenas a centenas
+de artigos/eventos por empresa). Rodar contra o volume real do backfill completo — PETR4
+sozinho com 166.783 artigos brutos e 21.022 eventos — expôs um padrão recorrente: código
+que fazia **uma chamada de rede por item dentro de um loop** em vez de uma chamada em lote.
+Individualmente inofensivo em dezenas de itens, catastrófico em dezenas de milhares
+(minutos viravam horas; em `run-event-study`, dias). Achados e corrigidos, todos com o
+mesmo padrão de fix (agregar em memória, gravar em lote via `UPDATE ... FROM (VALUES ...)`
+ou `upsert_many` em massa):
+
+1. **Dedup O(n²) puro** (`transforms/news_dedup.py`) — comparação de similaridade entre
+   todo par de artigos, sem levar em conta que a janela de dedup (72h) já descarta pares
+   distantes no tempo. Trocado por ordenação + janela deslizante: mesmo resultado, sem
+   comparar nenhum par que a janela já excluiria de qualquer forma.
+2. **Contagem de domínios únicos por cluster** (`analyze-news`) — um `fetch_all` por
+   cluster só para contar domínios distintos (20.555 clusters em PETR4 = 20.555
+   round-trips). Corrigido trazendo `domain` no fetch já paginado dos artigos e calculando
+   em memória.
+3. **`UPDATE` de reset amplo** (`analyze-news`) — uma única instrução cobrindo o ticker
+   inteiro antes de reaplicar atribuições de cluster; travou mais de 1h em PETR4 (fila de
+   conexão do pooler do banco, não lentidão da query). Eliminado por completo: reset e
+   reaplicação viraram o mesmo passo em lote.
+4. **`SELECT` sem paginação** (`analyze-news`, `classify-news`, `build-events`) — trazer o
+   ticker inteiro numa única consulta batia no `statement_timeout` do banco (8s no tier
+   gratuito). Extraída paginação por keyset compartilhada (`db.fetch_all_paginated`).
+5. **Upsert/`UPDATE` por evento** (`build-events`, `run-event-study`) — o pior caso: em
+   `run-event-study`, cada evento fazia *dois* round-trips (gravar o estudo + buscar o id
+   gerado) e reconstruía do zero a série de retornos inteira do instrumento a cada
+   iteração. Com 21.022 eventos em PETR4, isso era inviável em qualquer prazo razoável.
+   Corrigido calculando tudo em memória primeiro, depois um upsert em lote para
+   `event_studies`, uma resolução de ids em lotes de 5000, e um upsert final em lote para
+   `event_study_returns`.
+
+Nenhum desses fixes mudou uma fórmula ou um resultado — só a forma de buscar/gravar dado.
+A suíte de testes de event study (`test_event_study.py`) e as demais passaram sem alteração
+antes e depois de cada fix, confirmando isso. Logs de progresso por fase foram adicionados
+em todos os quatro pipelines (`logger.info` a cada etapa/lote) — sem eles, "lento" e
+"travado" eram indistinguíveis de fora, o que custou tempo real de diagnóstico nesta sessão.
 
 ### Fundamentos
 
@@ -332,24 +390,25 @@ arquivo, na mesma sequência do remoto.
 
 ### Limitações que permanecem
 
-1. Cobertura de notícias de VALE3/ITUB4 ainda em zero — backfill não iniciado nesta sessão.
-2. Cobertura de PETR4 ainda longe de `2017 → hoje` completo — rate limit real do ambiente
-   é o gargalo, não o código; checkpoint permite retomar sem perder progresso.
-3. `2017-01-01` como corte mínimo do GDELT é baseado em documentação pública da API +
+1. `2017-01-01` como corte mínimo do GDELT é baseado em documentação pública da API +
    evidência empírica de que 2015 é rejeitado — não foi confirmado ano a ano (2016 vs 2017)
-   contra este ambiente por causa do próprio rate limit que o achado documenta.
-4. Taxa de confounding de eventos em PETR4 (79%) não investigada a fundo.
-5. Survivorship bias permanece não resolvido — plano em `docs/survivorship_bias_plan.md`
+   contra este ambiente por causa do próprio rate limit do provedor.
+2. Taxa de confounding de eventos em PETR4 (86%) não investigada a fundo.
+3. `stock-research status` (view `v_data_coverage`) parou de funcionar no volume final —
+   a mesma classe de bug de escala desta seção, só que numa view, não num pipeline. Não
+   corrigida nesta etapa (não bloqueia nenhum dado real, só o comando de conveniência); os
+   números de cobertura desta seção vieram de consultas diretas, não desse comando.
+4. Survivorship bias permanece não resolvido — plano em `docs/survivorship_bias_plan.md`
    (fase1.1 §35), nenhuma implementação ainda, deliberadamente fora do escopo desta etapa.
+5. Assimetria de volume entre PETR4 e VALE3/ITUB4 é real (ver seção de notícias) — qualquer
+   análise cross-company vai precisar considerar isso, não é um artefato de coleta.
 
 ### A Fase 1 (+ 1.1) está pronta para a Fase 2?
 
-**Sim para preços e fundamentos — que são a base direta da Fase 2 (valuation, qualidade).**
-Os dois estão agora com profundidade histórica real (2010-2026) e comprovadamente corretos
-(point-in-time, idempotência, zero look-ahead em amostragem real). A ressalva de notícias/
-eventos que fechava a Fase 1 original continua válida e ainda mais explícita agora: a causa
-raiz do gap não é mais "não tentamos ainda" (Fase 1) nem "bug no pipeline" (Fase 1.1 corrigiu
-os bugs reais que existiam) — é uma restrição real e documentada de rate limit do provedor
-gratuito neste ambiente específico. Nada na arquitetura bloqueia a Fase 2 de começar com
-preços e fundamentos; o backfill de notícias pode continuar em paralelo, usando o checkpoint
-para retomar sem perder trabalho já feito.
+**Sim, sem ressalva de volume.** Preços, fundamentos, notícias, eventos e event studies
+estão fechados nas três empresas, com cobertura real (não estimada) e as limitações que
+restam documentadas explicitamente acima — nenhuma delas bloqueia a Fase 2. A base está
+comprovadamente correta (point-in-time, idempotência, zero look-ahead em amostragem real) e
+agora também comprovadamente **escalável** ao volume real de produção, não só ao volume de
+teste — os cinco bugs de escala documentados acima só existiam porque nunca tinham sido
+exercitados contra dezenas de milhares de linhas antes desta etapa.
