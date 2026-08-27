@@ -1733,3 +1733,30 @@ O FCFF das duas empresas está `ok` na sua própria perna (WC completo, insumos
 dívida for a proxy contábil pisada no soberano, nenhum DCF de não-financeira
 sai `ok`** -- o que é honesto. O caminho para `ok` é o refino já anotado no
 §35.3: spread de crédito observado (CDS/emissões).
+
+### 36.6 `cost_of_debt` V1 -- o que a proxy contábil realmente mede
+
+Registro explícito para o merge: o `cost_of_debt` atual é uma **V1 estimada de
+custo marginal**. A despesa financeira contábil da DRE (`3.06.02.01`, ou o nível
+2 no fallback) dividida pela dívida bruta representa **custo histórico /
+embedded** -- o juro médio dos contratos que já estão no balanço -- e **não
+necessariamente o custo corrente de captar dívida nova**. Numa empresa com
+dívida legada barata (PETR4, VALE3), essa proxy subestima o custo marginal; o
+piso do risk-free corrige parcialmente, mas por baixo.
+
+**Evolução futura (não implementar agora, não altera os fair values atuais)** --
+hierarquia de fontes para o spread de crédito, da melhor para a pior:
+
+1. **bond / emission spread** -- spread observado das emissões da própria
+   empresa sobre o título público de prazo equivalente. É a medida direta do
+   custo marginal.
+2. **CDS** -- credit default swap do emissor, quando houver liquidez. Proxy de
+   mercado do risco de default.
+3. **synthetic credit spread** -- rating sintético derivado de cobertura de
+   juros (EBIT / despesa de juros) mapeado para spread típico (tabela à la
+   Damodaran). Não depende de a empresa ter dívida negociada.
+4. **accounting proxy** -- o atual. Custo embedded. Último recurso.
+
+Cada nível grava a fonte usada e degrada `quality_flag` conforme desce a
+hierarquia. Enquanto o nível efetivo for o 4, todo DCF de não-financeira
+permanece `estimated` (§36.5) -- comportamento correto.
