@@ -536,6 +536,47 @@ def compute_quality_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command(name="compute-dcf")
+def compute_dcf_cmd(
+    company: Annotated[str | None, typer.Argument(help="ticker/CNPJ ou vazio p/ todas")] = None,
+    as_of: Annotated[str | None, typer.Option("--as-of", help="AAAA-MM-DD, default hoje")] = None,
+) -> None:
+    """DCF FCFF (só não-financeiras) + WACC + cenários + margem de segurança -- fase2_plan.md 10."""
+    from datetime import date as _date
+
+    from stock_research.pipelines.valuation_dcf import compute_and_store_dcf, run_dcf
+
+    as_of_date = _date.fromisoformat(as_of) if as_of else _date.today()
+    if company:
+        outcomes = {company: compute_and_store_dcf(company, as_of=as_of_date)}
+        failed = []
+    else:
+        res = run_dcf(as_of=as_of_date)
+        outcomes, failed = res["results"], res["failed"]
+
+    table = Table(title=f"compute-dcf ({as_of_date})", show_header=True, header_style="bold")
+    for col in ("Companhia", "WACC", "FCFF ini", "Fair (base)", "MoS (base)", "Flag"):
+        table.add_column(col)
+    for ref, o in outcomes.items():
+        if o.get("status") == "failed":
+            table.add_row(str(ref), "[red]FALHOU[/]", "", "", "", str(o.get("error", ""))[:40])
+            continue
+        w = f"{float(o['wacc']) * 100:.1f}%" if o.get("wacc") is not None else "--"
+        fc = f"{float(o['fcff_start']) / 1e9:.1f}B" if o.get("fcff_start") is not None else "--"
+        fv = (
+            f"R${float(o['fair_value_base']):.2f}" if o.get("fair_value_base") is not None else "--"
+        )
+        mos = (
+            f"{float(o['margin_of_safety_base']) * 100:.0f}%"
+            if o.get("margin_of_safety_base") is not None
+            else "--"
+        )
+        table.add_row(str(ref), w, fc, fv, mos, str(o.get("quality_flag") or o.get("status") or ""))
+    console.print(table)
+    if failed:
+        raise typer.Exit(code=1)
+
+
 @app.command(name="run-event-study")
 def run_event_study(
     ticker: Annotated[str, typer.Option("--ticker")],
