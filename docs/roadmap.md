@@ -415,7 +415,11 @@ exercitados contra dezenas de milhares de linhas antes desta etapa.
 
 ---
 
-## Fase 2 — motor de valuation e qualidade (em andamento, 2026-08-27)
+## Fase 2 — motor de valuation e qualidade (**CONCLUÍDA**, 2026-08-27)
+
+Merge em `main`: **`739678e`** (merge --no-ff de `fase2-valuation-engine`, 11 commits).
+460 testes; ruff + mypy limpos. Fair values (base): PETR4 R$53,14 `estimated`,
+VALE3 R$31,83 `estimated`, ITUB4 R$21,06 `ok`.
 
 Plano completo em [`docs/fase2_plan.md`](fase2_plan.md). Ordem de execução: bloco a bloco,
 com validação contra dados reais antes de cada parser. Estado nesta data:
@@ -433,15 +437,12 @@ com validação contra dados reais antes de cada parser. Estado nesta data:
 de Database Size; `VACUUM FULL` nas tabelas de notícias + drop de índice prematuro levou
 896 MB → ~525 MB.
 
-### Falta na Fase 2
+### Falta na Fase 2  *(histórico — resolvido, ver "fechamento" abaixo)*
 
-- **TTM** — completa o §5 (EBITDA/FCF trimestral isolado por subtração YTD + testes de
-  look-ahead do caminho TTM).
-- **DCF (§10)** — pipeline macro novo (risk-free Tesouro Prefixado §21.2 + ERP Damodaran
-  §21.4), WACC, projeção 5 anos, terminal value, cenários, margem de segurança; tabelas
-  `risk_free_assumptions`, `equity_risk_premium_assumptions`, `valuation_snapshots`.
+- ~~**TTM**~~ — feito (`cc057f5`), `analytics/ttm.py`.
+- ~~**DCF (§10)**~~ — feito (`8145bbb` + `56b1cb6` + `e9402ae` + `739678e`).
 - **`quality_bank_v1`** — permanece `incomplete` por desenho até haver fonte de
-  NIM/eficiência/Basileia/inadimplência (§9/§18).
+  NIM/eficiência/Basileia/inadimplência (§9/§18). *Atravessa para a Fase 3.*
 
 ### Achados/bugs desta etapa (detalhe em `fase2_plan.md` §24-33)
 
@@ -468,11 +469,27 @@ Damodaran ERP (`ctryprem.xlsx` → config curado). Ver `fase2_plan.md` §34.
 
 Migration `20260827000006` aplicada e `compute-dcf` rodado — 4 tabelas populadas.
 
-**Pendências:**
+### Fase 2 -- fechamento (§35-36)
+
+| § | Refino | Commit | Efeito |
+|---|---|---|---|
+| 35.1 | `CAPEX_DESC`: typo `"Adilções ao imobilizado"` como capex puro; `"Adições ao Imobilizado e investimentos"` só como fallback `estimated` | `c329e28` | VALE3 `free_cash_flow` TTM destravado até 2026-06 (2018+ `estimated`) |
+| 35.2 | FCFF passa a incluir **ΔWC operacional** (nova métrica `working_capital`: exclui caixa, aplic. financeiras, dívida de CP) | `c329e28` | PETR4 FCFF 100,7→111,5 bi (fair R$45,44→53,14); VALE3 20,8→24,3 bi (fair R$24,92→31,83) |
+| 35.3 | cost of debt tenta juros puros `3.06.02.01`; fallback `3.06.02` documentado; nunca zero | `c329e28` | WACC inalterado (taxa medida < risk-free → piso do soberano) |
+| 36 | Auditoria de decomposição + **propagação de qualidade** (premissa nunca sai `ok`); guard de `3.06.02.01` zerada da VALE3 | `ea456a4` | fair values idênticos; PETR4/VALE3 DCF → `estimated`, ITUB4 → `ok` |
+| 36.6 | `cost_of_debt` V1 = custo embedded; hierarquia futura (bond spread → CDS → synthetic → accounting) registrada | `094f449` | doc only |
+
+Decomposição da mudança do §35: **ΔWC responde por 100%** (PETR4 +R$7,70; VALE3
++R$6,91). CAPEX e cost of debt contribuíram R$0 no DCF (janela de 3 anos já usava
+linha pura de capex; taxa de dívida abaixo do risk-free antes e depois).
+
+**Pendências que atravessam para a Fase 3:**
 
 1. Registrar `20260827000006` no ledger `supabase_migrations.schema_migrations` (o
-   `exec_sql` RPC não tem permissão nesse schema — precisa do SQL editor).
-2. Fase 2 ainda aberta: `quality_bank_v1` (`incomplete` por desenho até haver fonte de
-   NIM/eficiência/Basileia), refino do `CAPEX_DESC` da VALE3 (Fase 1) para destravar
-   `free_cash_flow` TTM pós-2018 (causa exata em `fase2_plan.md` §34.3). Refinos do DCF:
-   ΔWC no FCFF, isolar juros puros no cost of debt, `terminal_growth` por empresa.
+   `exec_sql` RPC não tem permissão nesse schema — precisa do SQL editor). *Não bloqueia
+   nada: a migration já está aplicada no banco.*
+2. `quality_bank_v1` permanece `incomplete` por desenho até haver fonte de
+   NIM/eficiência/Basileia/inadimplência (§9/§18).
+3. `cost_of_debt` evolui pela hierarquia do §36.6 quando houver dado de spread de
+   emissão/CDS. Enquanto for proxy contábil, DCF de não-financeira é `estimated` — correto.
+4. `terminal_growth` único para todas as empresas (não diferenciado por setor/maturidade).
