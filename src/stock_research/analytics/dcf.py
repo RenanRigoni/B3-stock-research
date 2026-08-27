@@ -15,6 +15,11 @@ nominal (§21.1).
 
 ``margin_of_safety`` NÃO é recomendação de compra/venda -- é um número para o
 usuário olhar (§11).
+
+``input_quality_flag`` propaga a qualidade dos insumos (FCFF, WACC) para o
+resultado: um DCF montado sobre premissa (delta_WC assumido 0 por falta de
+working capital, capex de linha combinada, custo de dívida no piso) sai
+``estimated``, nunca ``ok`` (fase2_plan §36).
 """
 
 from __future__ import annotations
@@ -34,6 +39,8 @@ def compute_dcf(
     shares: float | None,
     market_price_per_share: float | None,
     forecast_years: int = 5,
+    input_quality_flag: str = "ok",
+    input_quality_reason: str | None = None,
 ) -> dict[str, Any]:
     if fcff_start is None or wacc is None or net_debt is None or shares is None or shares <= 0:
         return {
@@ -93,8 +100,9 @@ def compute_dcf(
         "market_price_per_share": market_price_per_share,
         "margin_of_safety": mos,
         "terminal_value_share_of_ev": pv_terminal / enterprise_value if enterprise_value else None,
-        "quality_flag": "ok",
-        "quality_reason": None,
+        # cálculo fechou, mas a qualidade nunca é melhor que a dos insumos
+        "quality_flag": input_quality_flag,
+        "quality_reason": input_quality_reason,
     }
 
 
@@ -108,6 +116,8 @@ def compute_dcf_scenarios(
     market_price_per_share: float | None,
     scenarios: dict[str, dict[str, float]],
     forecast_years: int = 5,
+    input_quality_flag: str = "ok",
+    input_quality_reason: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Roda o DCF uma vez por cenário (pessimista/base/otimista, §11)."""
     return {
@@ -120,6 +130,8 @@ def compute_dcf_scenarios(
             shares=shares,
             market_price_per_share=market_price_per_share,
             forecast_years=forecast_years,
+            input_quality_flag=input_quality_flag,
+            input_quality_reason=input_quality_reason,
         )
         for name, cfg in scenarios.items()
     }

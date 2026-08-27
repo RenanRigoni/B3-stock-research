@@ -48,7 +48,11 @@ def compute_residual_income(
     shares: float | None,
     market_price_per_share: float | None,
     forecast_years: int = 5,
+    input_quality_flag: str = "ok",
+    input_quality_reason: str | None = None,
 ) -> dict[str, Any]:
+    """``input_quality_flag`` propaga premissas dos insumos (ex.: payout default
+    quando não há proventos observados) para o resultado (§36)."""
     if None in (equity_start, net_income_start, coe, shares) or (
         shares is not None and shares <= 0
     ):
@@ -107,6 +111,6 @@ def compute_residual_income(
         "fair_value_per_share": fair_value_ps,
         "market_price_per_share": market_price_per_share,
         "margin_of_safety": mos,
-        "quality_flag": "ok",
-        "quality_reason": None,
+        "quality_flag": input_quality_flag,
+        "quality_reason": input_quality_reason,
     }

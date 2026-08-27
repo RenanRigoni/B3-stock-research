@@ -48,6 +48,17 @@ _INTEREST_BRANCH = ("3.06.02.01",)
 _FIN_EXPENSE_BRANCH = ("3.06.02",)
 
 
+# Severidade crescente: o resultado herda o PIOR flag dos insumos (§36).
+_FLAG_SEVERITY = {"ok": 0, "estimated": 1, "incomplete": 2, "missing_input": 3}
+
+
+def _merge_quality(*parts: tuple[str, str | None]) -> tuple[str, str | None]:
+    """Pior flag entre os insumos + concatenação dos motivos que degradaram."""
+    worst = max(parts, key=lambda p: _FLAG_SEVERITY.get(p[0], 0))[0]
+    reasons = [r for f, r in parts if f != "ok" and r]
+    return worst, "; ".join(reasons) if reasons else None
+
+
 def _wacc_config() -> dict[str, Any]:
     return yaml.safe_load((CONFIG_DIR / "wacc_v1.yaml").read_text(encoding="utf-8"))
 
@@ -92,27 +103,30 @@ def _latest_annual(
     instrument_id: int, metric: str, calc_version: str, as_of: date
 ) -> list[dict[str, Any]]:
     return fetch_all(
-        "select distinct on (reference_date) reference_date, metric_value, available_from "
-        "from public.fundamental_metrics where instrument_id = %s and metric_name = %s "
-        "and period_type = 'annual' and calculation_version = %s and available_from <= %s "
-        "and metric_value is not null and quality_flag in ('ok','estimated') "
-        "order by reference_date desc, available_from desc",
+        "select distinct on (reference_date) reference_date, metric_value, quality_flag, "
+        "available_from from public.fundamental_metrics where instrument_id = %s "
+        "and metric_name = %s and period_type = 'annual' and calculation_version = %s "
+        "and available_from <= %s and metric_value is not null "
+        "and quality_flag in ('ok','estimated') order by reference_date desc, available_from desc",
         [instrument_id, metric, calc_version, as_of],
     )
 
 
-def _fcff_avg(instrument_id: int, as_of: date) -> tuple[float | None, list[int], str]:
+def _fcff_avg(instrument_id: int, as_of: date) -> tuple[float | None, list[int], str, str]:
     """FCFF ~= media de 3 anos de ``NOPAT + D&A + capex - delta_WC_operacional``.
 
     ``capex`` ja vem NEGATIVO (convencao da CVM) -- e somado. ``delta_WC = WC_y
-    - WC_{y-1}``: aumento de capital de giro = uso de caixa -> subtrai. Se
-    ``WC_y`` ou ``WC_{y-1}`` faltar num ano, delta_WC daquele ano fica 0 e o
-    motivo registra que o FCFF ficou sem o ajuste de giro (nunca inventa).
+    - WC_{y-1}``: aumento de capital de giro = uso de caixa -> subtrai.
+
+    Qualidade (§36): delta_WC assumido 0 por ``working_capital`` ausente e uma
+    SUPOSICAO, nao um dado observado -- degrada para ``estimated``. Idem para
+    qualquer insumo do ano que ja venha ``estimated`` (ex.: capex de linha
+    combinada da VALE3, §35). Retorna ``(valor, anos, motivo, quality_flag)``.
     """
 
-    def by_year(metric: str, cv: str) -> dict[int, float]:
+    def by_year(metric: str, cv: str) -> dict[int, tuple[float, str]]:
         return {
-            r["reference_date"].year: float(r["metric_value"])
+            r["reference_date"].year: (float(r["metric_value"]), str(r["quality_flag"]))
             for r in _latest_annual(instrument_id, metric, cv, as_of)
         }
 
@@ -123,30 +137,54 @@ def _fcff_avg(instrument_id: int, as_of: date) -> tuple[float | None, list[int],
 
     years = sorted(set(nopat) & set(da) & set(capex), reverse=True)[:FCFF_AVG_YEARS]
     if len(years) < 2:
-        return None, years, f"apenas {len(years)} exercício(s) com NOPAT+D&A+capex"
+        return (
+            None,
+            years,
+            f"apenas {len(years)} exercício(s) com NOPAT+D&A+capex",
+            "missing_input",
+        )
 
     fcff_by_year: list[float] = []
     no_wc_years: list[int] = []
+    estimated_inputs: set[str] = set()
     for y in years:
-        base = nopat[y] + da[y] + capex[y]
+        base = nopat[y][0] + da[y][0] + capex[y][0]
+        for name, src in (("nopat", nopat), ("da", da), ("capex", capex)):
+            if src[y][1] == "estimated":
+                estimated_inputs.add(f"{name} {y}")
         if y in wc and (y - 1) in wc:
-            base -= wc[y] - wc[y - 1]  # delta WC
+            base -= wc[y][0] - wc[y - 1][0]  # delta WC
+            if wc[y][1] == "estimated" or wc[y - 1][1] == "estimated":
+                estimated_inputs.add(f"working_capital {y}")
         else:
             no_wc_years.append(y)
         fcff_by_year.append(base)
 
     reason = f"média de {len(years)} anos ({min(years)}-{max(years)}), FCFF = NOPAT+D&A+capex menos deltaWC"
+    flag = "ok"
     if no_wc_years:
-        reason += f"; sem ajuste de deltaWC em {no_wc_years} (working_capital ausente)"
-    return sum(fcff_by_year) / len(fcff_by_year), years, reason
+        flag = "estimated"
+        reason += (
+            f"; deltaWC ASSUMIDO 0 em {sorted(no_wc_years)} (working_capital ausente) "
+            "-- suposição, não dado observado"
+        )
+    if estimated_inputs:
+        flag = "estimated"
+        reason += f"; insumos estimados: {', '.join(sorted(estimated_inputs))}"
+    return sum(fcff_by_year) / len(fcff_by_year), years, reason, flag
 
 
 def _financial_expense_over_debt(
     instrument_id: int, as_of: date, gross_debt: float | None, risk_free_rate: float | None
-) -> tuple[float | None, str]:
+) -> tuple[float | None, str, str]:
+    """Custo de dívida pré-imposto. Retorna ``(taxa, motivo, quality_flag)``.
+
+    ``estimated`` quando a taxa usada não é a observada: fallback para a conta
+    agregada `3.06.02` (inclui variação cambial) ou piso do risk-free (§36).
+    """
     cfg = _wacc_config()["cost_of_debt"]
     if not gross_debt or gross_debt <= 0:
-        return None, "sem dívida bruta"
+        return None, "sem dívida bruta", "missing_input"
     facts = fetch_all(
         "select statement_type, account_code, account_description, value, scale, document_id "
         "from public.financial_statement_facts "
@@ -158,12 +196,24 @@ def _financial_expense_over_debt(
     )
     interest, _di = _sum_per_branch(facts, "DRE", _FIN_EXPENSE_DESC, _INTEREST_BRANCH)
     combined, _dc = _sum_per_branch(facts, "DRE", _FIN_EXPENSE_DESC, _FIN_EXPENSE_BRANCH)
-    if interest is not None:
+    # Zero em `3.06.02.01` NÃO é observação: a VALE3 declara a linha vazia e só
+    # preenche o nível 2 (§36). Empresa com dívida bruta positiva não paga juro
+    # zero -- trata como ausente e cai no fallback, nunca assume 0.
+    zeroed = interest is not None and float(interest) == 0.0
+    flag = "ok"
+    if interest is not None and not zeroed:
         total, src = interest, "juros puros (DRE 3.06.02.01)"
-    elif combined is not None:
-        total, src = combined, "despesa financeira nível 2 (inclui câmbio -- fallback)"
+    elif combined is not None and float(combined) != 0.0:
+        detalhe = " (3.06.02.01 declarada com valor zero)" if zeroed else ""
+        total = combined
+        src = f"despesa financeira nível 2 (inclui não-juros -- fallback){detalhe}"
+        flag = "estimated"  # não é juros puros: proxy, não observação limpa
     else:
-        return None, "conta 'Despesas Financeiras' não encontrada (nem 3.06.02.01 nem 3.06.02)"
+        return (
+            None,
+            "despesa financeira não observada (3.06.02.01 e 3.06.02 ausentes ou zeradas)",
+            "missing_input",
+        )
 
     raw = abs(float(total)) / gross_debt
     # Piso econômico: uma empresa não capta abaixo do soberano. O piso do config
@@ -172,11 +222,14 @@ def _financial_expense_over_debt(
     rate = max(floor, min(float(cfg["cap"]), raw))
     base = f"{src} / dívida bruta = {raw:.4f}"
     if rate != raw:
+        # a taxa gravada deixou de ser a medida -- passa a ser premissa
+        piso = "risk-free" if risk_free_rate is not None else "config"
         return (
             rate,
-            f"{base}, ajustado para {rate:.4f} (piso = {'risk-free' if risk_free_rate is not None else 'config'})",
+            f"{base}, SUBSTITUÍDO por {rate:.4f} (piso = {piso}) -- premissa, não observação",
+            "estimated",
         )
-    return rate, base
+    return rate, base, flag
 
 
 def compute_and_store_dcf(
@@ -277,10 +330,10 @@ def _run_one(
     market_cap = (
         float(mcap_row["market_cap"]) if mcap_row and mcap_row["market_cap"] is not None else None
     )
-    pretax_cod, cod_reason = _financial_expense_over_debt(
+    pretax_cod, cod_reason, cod_flag = _financial_expense_over_debt(
         inst["instrument_id"], as_of, gross_debt, rf.get("risk_free_rate")
     )
-    fcff, fcff_years, fcff_reason = _fcff_avg(inst["instrument_id"], as_of)
+    fcff, fcff_years, fcff_reason, fcff_flag = _fcff_avg(inst["instrument_id"], as_of)
 
     wacc = compute_wacc(
         risk_free_nominal_brl=rf.get("risk_free_rate"),
@@ -291,6 +344,8 @@ def _run_one(
         tax_rate=tax,
         market_cap=market_cap,
         gross_debt=gross_debt,
+        cost_of_debt_quality_flag=cod_flag if cod_flag != "missing_input" else "ok",
+        cost_of_debt_quality_reason=cod_reason if cod_flag == "estimated" else None,
     )
     wacc["beta_observations"] = bres.get("observations")
     wacc["cost_of_debt_reason"] = cod_reason
@@ -309,6 +364,13 @@ def _run_one(
         last = max(d for d in prices if d <= as_of) if any(d <= as_of for d in prices) else None
         price = prices.get(last) if last else None
 
+    # Qualidade do DCF = pior entre FCFF e WACC (§36): premissa em qualquer
+    # perna contamina o fair value inteiro.
+    dcf_flag, dcf_reason = _merge_quality(
+        (fcff_flag, f"FCFF: {fcff_reason}"),
+        (str(wacc.get("quality_flag", "ok")), f"WACC: {wacc.get('quality_reason')}"),
+    )
+
     dcfg = cfg["dcf"]
     scenarios = compute_dcf_scenarios(
         fcff_start=fcff,
@@ -319,6 +381,8 @@ def _run_one(
         market_price_per_share=price,
         scenarios=dcfg["scenarios"],
         forecast_years=int(dcfg["forecast_years"]),
+        input_quality_flag=dcf_flag,
+        input_quality_reason=dcf_reason,
     )
     for res in scenarios.values():
         res.setdefault("fcff_years", fcff_years)
@@ -391,11 +455,19 @@ def _run_bank(
         if dividends_ttm_total is not None and shares and shares > 0
         else None
     )
-    payout = (
-        max(0.0, min(1.0, dividends_ttm_total / net_income))
-        if dividends_ttm_total is not None and net_income and net_income > 0
-        else 0.5
-    )
+    payout_observed = dividends_ttm_total is not None and net_income is not None and net_income > 0
+    if payout_observed:
+        assert dividends_ttm_total is not None and net_income is not None
+        payout = max(0.0, min(1.0, dividends_ttm_total / net_income))
+        ri_flag, ri_reason = "ok", None
+    else:
+        # payout default é PREMISSA, não observação -- degrada o RIM (§36)
+        payout = 0.5
+        ri_flag = "estimated"
+        ri_reason = (
+            "payout_ratio ASSUMIDO 0,5 (dividends_ttm ou lucro positivo ausentes) "
+            "-- suposição, não dado observado"
+        )
 
     prices = _prices(ticker, since=(as_of.replace(year=as_of.year - 1)).isoformat())
     price = None
@@ -418,6 +490,8 @@ def _run_bank(
             shares=shares,
             market_price_per_share=price,
             forecast_years=int(dcfg["forecast_years"]),
+            input_quality_flag=ri_flag,
+            input_quality_reason=ri_reason,
         )
         ddm_scen[name] = compute_ddm(
             dividend_ttm_per_share=div_ps,

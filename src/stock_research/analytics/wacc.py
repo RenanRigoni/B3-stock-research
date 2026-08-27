@@ -37,9 +37,15 @@ def compute_wacc(
     tax_rate: float | None,
     market_cap: float | None,
     gross_debt: float | None,
+    cost_of_debt_quality_flag: str = "ok",
+    cost_of_debt_quality_reason: str | None = None,
 ) -> dict[str, Any]:
     """Monta o WACC passo a passo. Qualquer insumo faltando -> ``quality_flag``
-    degradado e ``wacc=None`` (nunca número inventado, §10/§21)."""
+    degradado e ``wacc=None`` (nunca número inventado, §10/§21).
+
+    ``cost_of_debt_quality_flag`` propaga a qualidade do custo de dívida: quando
+    a taxa usada não é a observada (piso do risk-free, conta agregada com
+    câmbio), o WACC inteiro sai ``estimated`` (§36)."""
     missing = [
         name
         for name, val in {
@@ -94,6 +100,6 @@ def compute_wacc(
         "equity_weight": equity_weight,
         "debt_weight": debt_weight,
         "wacc": wacc,
-        "quality_flag": "ok",
-        "quality_reason": None,
+        "quality_flag": cost_of_debt_quality_flag,
+        "quality_reason": cost_of_debt_quality_reason,
     }

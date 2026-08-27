@@ -1626,3 +1626,110 @@ soberano). Achado: para PETR4 e VALE3, `juros puros / dívida bruta` dá ~6,5%
 "juros puros (DRE 3.06.02.01) / dívida bruta = 0.0647, ajustado para 0.1237
 (piso = risk-free)". Refino futuro: usar spread de crédito observado (CDS/emissões)
 em vez da proxy contábil.
+
+---
+
+# AUDITORIA DE DECOMPOSIÇÃO + PROPAGAÇÃO DE QUALIDADE (§36, 2026-08-27)
+
+## 36. Auditoria do DCF e a regra "premissa nunca sai `ok`"
+
+Auditoria pedida antes do merge: decompor o FCFF de PETR4/VALE3 por ano,
+atribuir a mudança de fair value às suas causas e garantir que suposição não
+seja gravada como observação. **Nenhuma metodologia mudou** -- os números são
+idênticos antes e depois; o que mudou foi o `quality_flag`.
+
+### 36.1 Decomposição do FCFF (média de 3 anos, valores em bi de BRL)
+
+**PETR4** (todos os insumos `quality_flag='ok'`):
+
+| ano | EBIT | tax_rate | NOPAT | D&A | CAPEX | WC | ΔWC | FCFF |
+|---|---|---|---|---|---|---|---|---|
+| 2025 | 145,63 | 0,2656 | 106,95 | 84,39 | −108,71 | −41,70 | −4,23 | 86,86 |
+| 2024 | 137,20 | 0,3238 | 92,78 | 67,03 | −79,86 | −37,46 | −11,13 | 91,09 |
+| 2023 | 189,34 | 0,2948 | 133,53 | 66,20 | −60,31 | −26,33 | −17,11 | 156,53 |
+
+média = **111,49 bi**
+
+**VALE3** (todos os insumos `quality_flag='ok'`):
+
+| ano | EBIT | tax_rate | NOPAT | D&A | CAPEX | WC | ΔWC | FCFF |
+|---|---|---|---|---|---|---|---|---|
+| 2025 | 31,97 | 0,5575 | 14,15 | 17,31 | −33,39 | −24,57 | −3,21 | 1,28 |
+| 2024 | 55,46 | 0,1108 | 49,31 | 16,52 | −35,10 | −21,36 | −28,16 | 58,89 |
+| 2023 | 65,27 | 0,2700 | 47,65 | 15,30 | −29,45 | 6,80 | 20,75 | 12,76 |
+
+média = **24,31 bi**
+
+`working_capital` existe em **todos** os 16 anos (2010-2025) para as duas
+empresas -- nenhum ΔWC foi assumido 0 na janela usada.
+
+### 36.2 Atribuição da mudança de fair value (§35)
+
+| causa | PETR4 | VALE3 |
+|---|---|---|
+| correção de CAPEX (typo + linha combinada) | **R$ 0,00** | **R$ 0,00** |
+| inclusão de ΔWC | **+R$ 7,70** | **+R$ 6,91** |
+| alteração do cost of debt | **R$ 0,00** | **R$ 0,00** |
+| outros efeitos | R$ 0,00 | R$ 0,00 |
+| **total** (fair base) | R$ 45,44 → **R$ 53,14** | R$ 24,92 → **R$ 31,83** |
+
+- **CAPEX = 0** porque o `capex` anual de 2023-2025 (a janela do DCF) já vinha
+  da linha pura em ambas as empresas. O refino do §35.1 alterou apenas a série
+  histórica/TTM de `free_cash_flow` da VALE3 (2012 pelo typo; 2018+ pela linha
+  combinada) -- fora da média de 3 anos.
+- **Cost of debt = 0** porque a taxa medida fica **abaixo do risk-free** nos dois
+  casos (PETR4 6,47%; VALE3 8,24%) e o piso do risk-free (12,3725%) prevalece
+  igualmente antes e depois. WACC inalterado: 15,67% / 16,34%.
+- **ΔWC responde por 100% da mudança.** O efeito é linear no EV: PETR4 EV
+  923,08 → 1.022,35 bi; VALE3 EV 179,79 → 210,45 bi.
+
+### 36.3 `3.06.02.01` zerada não é observação (achado da auditoria)
+
+A VALE3 **declara** `3.06.02.01 "Despesas financeiras" com valor 0,000** e
+preenche apenas o nível 2 (`3.06.02` = −8,079 bi). O código do §35 aceitava esse
+zero como juros puros observados e gravava o motivo "juros puros / dívida bruta
+= 0.0000" -- enganoso. Corrigido: **zero em `3.06.02.01` é tratado como ausente**
+(empresa com dívida bruta positiva não paga juro zero) e cai no fallback do
+nível 2, com o motivo explicitando "(3.06.02.01 declarada com valor zero)". Se
+os dois níveis estiverem ausentes ou zerados → `missing_input`, nunca zero.
+
+Nota: o desdobramento do nível 3 não é padronizado entre empresas. Na PETR4
+`3.06.02.02` = "Variações monetárias e cambiais"; na VALE3 = "Resultado de
+alienação/baixa de participação". Por isso o fallback do nível 2 é rotulado
+"inclui não-juros", não "inclui câmbio".
+
+### 36.4 Regra de propagação de qualidade
+
+**Número que veio de premissa nunca sai `quality_flag='ok'`.** Implementado como
+cadeia explícita, com o pior flag vencendo (`_merge_quality`,
+`ok < estimated < incomplete < missing_input`):
+
+| origem da premissa | onde degrada | flag |
+|---|---|---|
+| ΔWC assumido 0 porque `working_capital` falta no ano | `_fcff_avg` → DCF → snapshot | `estimated` |
+| insumo anual (`nopat`/`da`/`capex`/`working_capital`) já `estimated` | `_fcff_avg` → DCF → snapshot | `estimated` |
+| cost of debt do fallback nível 2 | `_financial_expense_over_debt` → WACC → snapshot | `estimated` |
+| cost of debt substituído pelo piso (risk-free/config) | `_financial_expense_over_debt` → WACC → snapshot | `estimated` |
+| `payout_ratio` default 0,5 no Residual Income | `_run_bank` → RIM → snapshot | `estimated` |
+
+O `quality_reason` do snapshot passa a nomear a premissa e a origem
+("deltaWC ASSUMIDO 0 em [anos] -- suposição, não dado observado";
+"SUBSTITUÍDO por 0.1237 (piso = risk-free) -- premissa, não observação").
+`compute_dcf`, `compute_wacc` e `compute_residual_income` ganharam
+`input_quality_flag`/`input_quality_reason` -- eles nunca **melhoram** a
+qualidade do que receberam.
+
+### 36.5 Resultado após a propagação (números inalterados)
+
+| | fair (base) | WACC/coe | flag | por quê |
+|---|---|---|---|---|
+| PETR4 `fcff` | R$ 53,14 | 15,67% | **`estimated`** | cost of debt no piso do risk-free |
+| VALE3 `fcff` | R$ 31,83 | 16,34% | **`estimated`** | `3.06.02.01` zerada → nível 2, depois piso |
+| ITUB4 `residual_income` | R$ 21,06 | 20,00% | **`ok`** | payout observado (`dividends_ttm` / lucro) |
+| ITUB4 `ddm` | R$ 20,50 | 20,00% | **`ok`** | dividendo TTM observado |
+
+O FCFF das duas empresas está `ok` na sua própria perna (WC completo, insumos
+`ok`); o que degrada é o WACC. Consequência prática: **enquanto o custo de
+dívida for a proxy contábil pisada no soberano, nenhum DCF de não-financeira
+sai `ok`** -- o que é honesto. O caminho para `ok` é o refino já anotado no
+§35.3: spread de crédito observado (CDS/emissões).
