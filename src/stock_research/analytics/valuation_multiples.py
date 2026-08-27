@@ -98,8 +98,16 @@ def _div(numer: Decimal | None, denom: Decimal | None) -> Decimal | None:
     return numer / denom
 
 
-def compute_multiples(company_id: int, as_of: date) -> dict[str, Any]:
-    """Calcula a linha de ``valuation_multiples`` (base FY) para uma companhia."""
+def compute_multiples(company_id: int, as_of: date, *, basis: str = "fy") -> dict[str, Any]:
+    """Calcula a linha de ``valuation_multiples`` para uma companhia.
+
+    ``basis='fy'``: denominadores = último exercício anual disponível.
+    ``basis='ttm'``: net_income/ebitda/fcf = soma dos últimos 4 trimestres
+    (``period_type='ttm'``, ``valuation_metrics_v1``); equity/net_debt continuam
+    a última posição de balanço.
+    """
+    if basis not in ("fy", "ttm"):
+        raise ValueError(f"basis inválido: {basis}")
     company = fetch_one(
         "select company_id, cnpj, financial_company from public.companies where company_id = %s",
         [company_id],
@@ -165,9 +173,15 @@ def compute_multiples(company_id: int, as_of: date) -> dict[str, Any]:
     fundamentals_ref: date | None = None
     if primary is not None:
         pid = primary["instrument_id"]
-        ni_r = _metric_as_of(pid, "net_income", "annual", "fundamental_metrics_v1", as_of)
-        ebitda_r = _metric_as_of(pid, "ebitda", "annual", "valuation_metrics_v1", as_of)
-        fcf_r = _metric_as_of(pid, "free_cash_flow", "annual", "fundamental_metrics_v1", as_of)
+        if basis == "ttm":
+            # net_income/ebitda/fcf TTM ficam todos sob valuation_metrics_v1.
+            ni_r = _metric_as_of(pid, "net_income", "ttm", "valuation_metrics_v1", as_of)
+            ebitda_r = _metric_as_of(pid, "ebitda", "ttm", "valuation_metrics_v1", as_of)
+            fcf_r = _metric_as_of(pid, "free_cash_flow", "ttm", "valuation_metrics_v1", as_of)
+        else:
+            ni_r = _metric_as_of(pid, "net_income", "annual", "fundamental_metrics_v1", as_of)
+            ebitda_r = _metric_as_of(pid, "ebitda", "annual", "valuation_metrics_v1", as_of)
+            fcf_r = _metric_as_of(pid, "free_cash_flow", "annual", "fundamental_metrics_v1", as_of)
         equity_r = _metric_as_of(pid, "equity", "point_in_time", "fundamental_metrics_v1", as_of)
         nd_r = _metric_as_of(pid, "net_debt", "point_in_time", "fundamental_metrics_v1", as_of)
         ni = Decimal(ni_r["metric_value"]) if ni_r else None
@@ -200,7 +214,7 @@ def compute_multiples(company_id: int, as_of: date) -> dict[str, Any]:
     return {
         "company_id": company_id,
         "as_of_date": as_of,
-        "basis": "fy",
+        "basis": basis,
         "market_cap": market_cap_val,
         "enterprise_value": enterprise_value,
         "price_earnings": pe,
@@ -225,9 +239,14 @@ def compute_multiples(company_id: int, as_of: date) -> dict[str, Any]:
 
 
 def compute_and_store_multiples(
-    company_ref: str | int, *, as_of: date | None = None, run_id: int | None = None
+    company_ref: str | int,
+    *,
+    as_of: date | None = None,
+    basis: str = "fy",
+    run_id: int | None = None,
 ) -> dict[str, Any]:
-    """``company_ref``: company_id (int) ou ticker/CNPJ (str). ``as_of`` default = hoje."""
+    """``company_ref``: company_id (int) ou ticker/CNPJ (str). ``as_of`` default = hoje.
+    ``basis``: ``'fy'`` (default) ou ``'ttm'``."""
     as_of = as_of or date.today()
     if isinstance(company_ref, int):
         company_id = company_ref
@@ -244,10 +263,13 @@ def compute_and_store_multiples(
 
     owns_run = run_id is None
     if owns_run:
-        run_id = start_run(PIPELINE, params={"company_id": company_id, "as_of": as_of.isoformat()})
+        run_id = start_run(
+            PIPELINE,
+            params={"company_id": company_id, "as_of": as_of.isoformat(), "basis": basis},
+        )
     assert run_id is not None
     try:
-        row = compute_multiples(company_id, as_of)
+        row = compute_multiples(company_id, as_of, basis=basis)
         row["run_id"] = run_id
         stats = upsert_many(
             "valuation_multiples",

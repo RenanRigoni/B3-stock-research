@@ -443,14 +443,16 @@ def compute_metrics(
 def compute_multiples_cmd(
     company: Annotated[str | None, typer.Argument(help="ticker, CNPJ ou vazio p/ todas")] = None,
     as_of: Annotated[str | None, typer.Option("--as-of", help="AAAA-MM-DD, default hoje")] = None,
+    basis: Annotated[str, typer.Option("--basis", help="fy | ttm | both")] = "both",
 ) -> None:
-    """Market cap por companhia + múltiplos point-in-time (base FY) -- fase2_plan.md 4-5."""
+    """Market cap por companhia + múltiplos point-in-time (FY e/ou TTM) -- fase2_plan.md 4-5."""
     from datetime import date as _date
 
     from stock_research.analytics.valuation_multiples import compute_and_store_multiples
     from stock_research.db import fetch_all as _fetch_all
 
     as_of_date = _date.fromisoformat(as_of) if as_of else _date.today()
+    bases = ["fy", "ttm"] if basis == "both" else [basis]
     if company:
         refs: list[Any] = [company]
     else:
@@ -460,25 +462,28 @@ def compute_multiples_cmd(
         ]
 
     table = Table(title=f"compute-multiples ({as_of_date})", show_header=True, header_style="bold")
-    for col in ("Companhia", "Market cap", "P/L", "EV/EBITDA", "P/VP", "DY", "Flag"):
+    for col in ("Companhia", "Base", "Market cap", "P/L", "EV/EBITDA", "P/VP", "DY", "Flag"):
         table.add_column(col)
     failed = False
     for ref in refs:
-        try:
-            r = compute_and_store_multiples(ref, as_of=as_of_date)
-            mc = f"{float(r['market_cap']) / 1e9:.1f}B" if r["market_cap"] is not None else "--"
-            pe = f"{float(r['price_earnings']):.1f}" if r["price_earnings"] is not None else "--"
-            ev = f"{float(r['ev_ebitda']):.1f}" if r["ev_ebitda"] is not None else "--"
-            pb = f"{float(r['price_book']):.2f}" if r["price_book"] is not None else "--"
-            dy = (
-                f"{float(r['dividend_yield']) * 100:.1f}%"
-                if r["dividend_yield"] is not None
-                else "--"
-            )
-            table.add_row(str(ref), mc, pe, ev, pb, dy, r["quality_flag"])
-        except Exception as exc:  # uma companhia nao aborta as outras
-            failed = True
-            table.add_row(str(ref), "[red]FALHOU[/]", "", "", "", "", str(exc)[:40])
+        for b in bases:
+            try:
+                r = compute_and_store_multiples(ref, as_of=as_of_date, basis=b)
+                mc = f"{float(r['market_cap']) / 1e9:.1f}B" if r["market_cap"] is not None else "--"
+                pe = (
+                    f"{float(r['price_earnings']):.1f}" if r["price_earnings"] is not None else "--"
+                )
+                ev = f"{float(r['ev_ebitda']):.1f}" if r["ev_ebitda"] is not None else "--"
+                pb = f"{float(r['price_book']):.2f}" if r["price_book"] is not None else "--"
+                dy = (
+                    f"{float(r['dividend_yield']) * 100:.1f}%"
+                    if r["dividend_yield"] is not None
+                    else "--"
+                )
+                table.add_row(str(ref), b, mc, pe, ev, pb, dy, r["quality_flag"])
+            except Exception as exc:  # uma companhia nao aborta as outras
+                failed = True
+                table.add_row(str(ref), b, "[red]FALHOU[/]", "", "", "", "", str(exc)[:40])
     console.print(table)
     if failed:
         raise typer.Exit(code=1)

@@ -33,6 +33,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+from stock_research.analytics import ttm
 from stock_research.analytics.fundamentals_metrics import (
     CASH_DESC,
     DEBT_BRANCHES,
@@ -52,6 +53,8 @@ logger = get_logger(__name__)
 
 PIPELINE = "valuation_metrics"
 CALCULATION_VERSION = "valuation_metrics_v1"
+# Métricas da Fase 1 cujo TTM montamos aqui (via extra_ttm_series).
+_TTM_FROM_PHASE1 = ("net_income", "free_cash_flow", "revenue")
 
 # D&A -- ramo 6.01.01 do DFC (add-back ao lucro liquido), casado por descricao
 # normalizada porque o codigo do subitem migra ao longo dos anos (fase2_plan.md 28).
@@ -299,15 +302,159 @@ def _ok_or_missing(value: Any, reason: str) -> tuple[str, str | None]:
     return ("ok", None) if value is not None else ("missing_input", reason)
 
 
+# Métricas de fluxo cujo TTM (soma de 4 trimestres) faz sentido. `revenue`,
+# `net_income` e `free_cash_flow` vêm da Fase 1 (via `extra_series`).
+_TTM_FLOW_METRICS = ("da", "ebitda", "pretax_income", "income_tax", "nopat")
+
+
+def _row_to_point(row: dict[str, Any]) -> ttm.Point | None:
+    if row.get("metric_value") is None:
+        return None
+    return ttm.Point(
+        Decimal(str(row["metric_value"])), row.get("available_from"), row.get("quality_flag", "ok")
+    )
+
+
+def _series_from_rows(
+    rows: list[dict[str, Any]], metric: str
+) -> tuple[dict[int, ttm.Point], dict[tuple[int, int], ttm.Point]]:
+    annual: dict[int, ttm.Point] = {}
+    ytd: dict[tuple[int, int], ttm.Point] = {}
+    for r in rows:
+        if r["metric_name"] != metric:
+            continue
+        pt = _row_to_point(r)
+        if pt is None:
+            continue
+        rd: date = r["reference_date"]
+        if r["period_type"] == "annual":
+            annual[rd.year] = pt
+        elif r["period_type"] == "ytd":
+            q = ttm.quarter_of(rd)
+            if q in (1, 2, 3):
+                ytd[(rd.year, q)] = pt
+    return annual, ytd
+
+
+def _derive_ttm_rows(
+    base_rows: list[dict[str, Any]],
+    *,
+    instrument_id: int,
+    company_id: int | None,
+    extra_series: dict[str, tuple[dict[int, ttm.Point], dict[tuple[int, int], ttm.Point]]]
+    | None = None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+
+    def emit(name: str, rd: date, pt: ttm.Point, reason: str) -> None:
+        _emit(
+            out,
+            instrument_id=instrument_id,
+            company_id=company_id,
+            reference_date=rd,
+            available_from=pt.available_from,
+            period_type="ttm",
+            name=name,
+            value=pt.value,
+            doc_ids=[],
+            flag=pt.quality_flag,
+            reason=reason,
+        )
+
+    series: dict[str, dict[date, ttm.Point]] = {}
+    for metric in _TTM_FLOW_METRICS:
+        annual, ytd = _series_from_rows(base_rows, metric)
+        series[metric] = ttm.assemble_ttm(annual, ytd)
+    for metric, (annual, ytd) in (extra_series or {}).items():
+        series[metric] = ttm.assemble_ttm(annual, ytd)
+
+    for metric, points in series.items():
+        for rd, pt in points.items():
+            emit(metric, rd, pt, "soma dos 4 trimestres isolados terminando em " + rd.isoformat())
+
+    # derivadas TTM
+    pretax_ttm = series.get("pretax_income", {})
+    tax_ttm = series.get("income_tax", {})
+    for rd, pre in pretax_ttm.items():
+        tx = tax_ttm.get(rd)
+        if tx is not None and pre.value > 0:
+            af, flag = ttm.combine(pre, tx)
+            emit(
+                "effective_tax_rate",
+                rd,
+                ttm.Point(abs(tx.value) / pre.value, af, flag),
+                "derivado: abs(income_tax TTM) / pretax_income TTM",
+            )
+
+    nopat_ttm = series.get("nopat", {})
+    invested_annual, _ = _series_from_rows(base_rows, "invested_capital")
+    for rd, npt in nopat_ttm.items():
+        inv = _nearest_annual(invested_annual, rd.year)
+        if inv is not None and inv.value != 0:
+            af, flag = ttm.combine(npt, inv)
+            emit(
+                "roic",
+                rd,
+                ttm.Point(npt.value / inv.value, af, flag),
+                "derivado: nopat TTM / invested_capital (último anual <= o ano do TTM)",
+            )
+    return out
+
+
+def _nearest_annual(annual: dict[int, ttm.Point], year: int) -> ttm.Point | None:
+    candidates = [y for y in annual if y <= year]
+    return annual[max(candidates)] if candidates else None
+
+
+def _phase1_ttm_series(
+    instrument_id: int,
+) -> dict[str, tuple[dict[int, ttm.Point], dict[tuple[int, int], ttm.Point]]]:
+    """Séries anuais + YTD de ``net_income``/``free_cash_flow``/``revenue``
+    já calculadas pela Fase 1 (``fundamental_metrics_v1``), para montar o TTM
+    delas aqui."""
+    rows = fetch_all(
+        "select distinct on (metric_name, period_type, reference_date) "
+        "metric_name, period_type, reference_date, metric_value, available_from, quality_flag "
+        "from public.fundamental_metrics "
+        "where instrument_id = %s and calculation_version = 'fundamental_metrics_v1' "
+        "and metric_name in ('net_income', 'free_cash_flow', 'revenue') "
+        "and period_type in ('annual', 'ytd') and metric_value is not null "
+        "order by metric_name, period_type, reference_date, available_from desc",
+        [instrument_id],
+    )
+    out: dict[str, tuple[dict[int, ttm.Point], dict[tuple[int, int], ttm.Point]]] = {
+        m: ({}, {}) for m in _TTM_FROM_PHASE1
+    }
+    for r in rows:
+        pt = ttm.Point(
+            Decimal(str(r["metric_value"])), r["available_from"], r["quality_flag"] or "ok"
+        )
+        annual, ytd = out[r["metric_name"]]
+        rd: date = r["reference_date"]
+        if r["period_type"] == "annual":
+            annual[rd.year] = pt
+        else:
+            q = ttm.quarter_of(rd)
+            if q in (1, 2, 3):
+                ytd[(rd.year, q)] = pt
+    return out
+
+
 def compute_valuation_metrics_for_facts(
     facts: list[dict[str, Any]],
     *,
     instrument_id: int,
     company_id: int | None,
     financial_company: bool,
+    extra_ttm_series: dict[str, tuple[dict[int, ttm.Point], dict[tuple[int, int], ttm.Point]]]
+    | None = None,
 ) -> list[dict[str, Any]]:
     """Função pura: fatos consolidados de um instrumento -> linhas de
-    ``fundamental_metrics`` com ``calculation_version='valuation_metrics_v1'``.
+    ``fundamental_metrics`` com ``calculation_version='valuation_metrics_v1'``,
+    incluindo ``period_type='ttm'``.
+
+    ``extra_ttm_series``: séries anuais+YTD já calculadas pela Fase 1
+    (``net_income``, ``free_cash_flow``, ``revenue``) para o TTM delas.
 
     Mesma limitação de ``compute_metrics_for_facts`` da Fase 1: usa a versão
     mais recente de cada ``(reference_date, account_code)`` -- para análise
@@ -326,6 +473,12 @@ def compute_valuation_metrics_for_facts(
             financial_company=financial_company,
         ):
             by_key[(row["period_type"], row["metric_name"], row["reference_date"])] = row
+
+    base = list(by_key.values())
+    for row in _derive_ttm_rows(
+        base, instrument_id=instrument_id, company_id=company_id, extra_series=extra_ttm_series
+    ):
+        by_key[(row["period_type"], row["metric_name"], row["reference_date"])] = row
     return list(by_key.values())
 
 
@@ -353,11 +506,13 @@ def compute_and_store_valuation_metrics(
             "where instrument_id = %s and is_consolidated = true",
             [instrument["instrument_id"]],
         )
+        extra = _phase1_ttm_series(instrument["instrument_id"])
         rows = compute_valuation_metrics_for_facts(
             facts,
             instrument_id=instrument["instrument_id"],
             company_id=instrument["company_id"],
             financial_company=bool(instrument["financial_company"]),
+            extra_ttm_series=extra,
         )
         for r in rows:
             r["run_id"] = run_id

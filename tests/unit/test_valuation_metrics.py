@@ -6,7 +6,7 @@ com contas e valores calcados no DFP real de PETR4/ITUB4 (§28-29).
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from stock_research.analytics.valuation_metrics import (
@@ -54,6 +54,124 @@ def _run(facts, *, financial_company=False):
         facts, instrument_id=2, company_id=1, financial_company=financial_company
     )
     return {r["metric_name"]: r for r in rows}
+
+
+# --- fixtures TTM: DFP anual + ITR YTD de vários anos/trimestres -------------
+
+
+def _pkg(ref: date, *, doc: str, af: datetime, ebit, da, pretax, tax):
+    """Um pacote (DFP anual ou ITR YTD) -- só as contas que o TTM precisa."""
+    p_start = date(ref.year, 1, 1)
+    common = dict(
+        fiscal_year_order="ULTIMO",
+        version="1",
+        scale=1000,
+        document_id=int(ref.strftime("%Y%m%d")),
+        fact_id=1,
+        available_from=af,
+        reference_date=ref,
+        document_type=doc,
+        period_start=p_start,
+        period_end=ref,
+    )
+    return [
+        {
+            **common,
+            "statement_type": "DRE",
+            "account_code": "3.05",
+            "account_description": "Resultado Antes do Resultado Financeiro e dos Tributos",
+            "value": Decimal(ebit),
+        },
+        {
+            **common,
+            "statement_type": "DRE",
+            "account_code": "3.07",
+            "account_description": "Resultado Antes dos Tributos sobre o Lucro",
+            "value": Decimal(pretax),
+        },
+        {
+            **common,
+            "statement_type": "DRE",
+            "account_code": "3.08",
+            "account_description": "Imposto de Renda e Contribuição Social sobre o Lucro",
+            "value": Decimal(tax),
+        },
+        {
+            **common,
+            "statement_type": "DFC_MI",
+            "account_code": "6.01.01.04",
+            "account_description": "Depreciação, Depleção e Amortização",
+            "value": Decimal(da),
+        },
+    ]
+
+
+class TestTtm:
+    def _facts(self):
+        f: list[dict] = []
+        af0 = datetime(2024, 1, 1, tzinfo=UTC)
+        # 2023: anual + YTD Q1/Q2/Q3
+        f += _pkg(date(2023, 12, 31), doc="DFP", af=af0, ebit=400, da=200, pretax=360, tax=-90)
+        for q, mm, cum in ((1, 3, 100), (2, 6, 200), (3, 9, 300)):
+            f += _pkg(
+                date(2023, mm, 30 if mm != 3 else 31),
+                doc="ITR",
+                af=af0 + timedelta(days=90 * q),
+                ebit=cum,
+                da=cum // 2,
+                pretax=cum * 9 // 10,
+                tax=-(cum // 4),
+            )
+        # 2024: YTD Q1/Q2/Q3 (sem anual ainda)
+        for q, mm, cum in ((1, 3, 120), (2, 6, 240), (3, 9, 360)):
+            f += _pkg(
+                date(2024, mm, 30 if mm != 3 else 31),
+                doc="ITR",
+                af=datetime(2024, 6, 1, tzinfo=UTC) + timedelta(days=90 * q),
+                ebit=cum,
+                da=cum // 2,
+                pretax=cum * 9 // 10,
+                tax=-(cum // 4),
+            )
+        return f
+
+    def test_ttm_ebitda_no_fim_de_2023_bate_com_o_anual(self):
+        rows = compute_valuation_metrics_for_facts(
+            self._facts(), instrument_id=2, company_id=1, financial_company=False
+        )
+        ttm = {
+            (r["metric_name"], r["reference_date"]): r for r in rows if r["period_type"] == "ttm"
+        }
+        # TTM(ebitda) em 31/12/2023 = ebit anual (400) + da anual (200), em MIL
+        e = ttm[("ebitda", date(2023, 12, 31))]
+        assert e["metric_value"] == Decimal((400 + 200) * 1000)
+
+    def test_ttm_avanca_com_os_trimestres_de_2024(self):
+        rows = compute_valuation_metrics_for_facts(
+            self._facts(), instrument_id=2, company_id=1, financial_company=False
+        )
+        ttm = {
+            (r["metric_name"], r["reference_date"]): r for r in rows if r["period_type"] == "ttm"
+        }
+        # TTM em 30/09/2024 usa Q4'23 (isolado) + Q1..Q3'24 (isolados)
+        assert ("ebitda", date(2024, 9, 30)) in ttm
+        assert ("effective_tax_rate", date(2024, 9, 30)) in ttm
+
+    def test_ttm_available_from_nao_vaza_futuro(self):
+        rows = compute_valuation_metrics_for_facts(
+            self._facts(), instrument_id=2, company_id=1, financial_company=False
+        )
+        ttm_2024q3 = next(
+            r
+            for r in rows
+            if r["period_type"] == "ttm"
+            and r["metric_name"] == "ebitda"
+            and r["reference_date"] == date(2024, 9, 30)
+        )
+        # available_from = o mais recente dos 4 pacotes usados (Q3'24)
+        assert ttm_2024q3["available_from"] == datetime(2024, 6, 1, tzinfo=UTC) + timedelta(
+            days=270
+        )
 
 
 class TestNonFinancialHappyPath:
