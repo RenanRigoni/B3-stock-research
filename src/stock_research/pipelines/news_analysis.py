@@ -97,45 +97,50 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
         window_hours=float(settings["dedup_window_hours"]),
     )
     logger.info("analyze-news: clustering concluido, %d clusters", len(clusters))
-    if not clusters:
-        return {"articles_considered": len(articles), "clusters": 0, "clustered": 0}
 
-    cluster_rows = [
-        {
-            "canonical_article_id": c.canonical_article_id,
-            "representative_title": c.representative_title,
-            "article_count": len(c.article_ids),
-            "unique_domains": _count_unique_domains(c.article_ids),
-            "first_seen": c.first_seen,
-            "last_seen": c.last_seen,
-            "dedup_method": "title_hash+rapidfuzz",
-            "dedup_version": "dedup_v1",
-        }
-        for c in clusters
-    ]
+    # Assume ninguem clusterizado por padrao, depois sobrescreve quem esta
+    # (dict, nao um UPDATE de reset separado): cobre TODO artigo considerado
+    # nesta chamada, entao um artigo que SAIU de um cluster entre execucoes
+    # naturalmente volta a (None, False) aqui -- idempotencia pelo estado
+    # final, sem precisar de um UPDATE amplo de "zera tudo antes" que so
+    # existia pra isso. Esse UPDATE amplo (subquery sobre o ticker inteiro)
+    # foi a causa real de PETR4 (166 mil artigos) travar por mais de 1h no
+    # tier Nano -- fila de conexao do pooler, nao o codigo em si. Uma unica
+    # rodada de UPDATEs em lote (ja provada com VALE3/ITUB4) sempre e mais
+    # confiavel que uma unica instrucao gigante.
+    assignments: dict[int, tuple[int | None, bool]] = {a["article_id"]: (None, False) for a in articles}
 
-    # Reset antes de reaplicar: a composicao de um cluster pode mudar entre
-    # execucoes (artigo novo chega, thresholds mudam de config). Zerar
-    # primeiro garante que um artigo que SAIU de um cluster nao fique com um
-    # duplicate_cluster_id obsoleto -- sem isso, so as atribuicoes NOVAS
-    # seriam corrigidas, nunca as removidas (idempotencia pelo estado final,
-    # nao so pela ausencia de duplicata).
-    _reset_cluster_assignments(instrument_id)
-    logger.info("analyze-news: reset de atribuicoes concluido")
-
-    # upsert por canonical_article_id (chave natural -- ver migration
-    # news_clusters_canonical_article_key): reexecutar atualiza o mesmo
-    # cluster em vez de criar outro. Upsert aqui e seguro porque
-    # canonical_article_id nao e a coluna identity da tabela.
-    upsert_many(
-        "news_clusters", cluster_rows, conflict_columns=["canonical_article_id"],
-        update_columns=[
-            "representative_title", "article_count", "unique_domains",
-            "first_seen", "last_seen", "dedup_method", "dedup_version",
-        ],
-    )
-    logger.info("analyze-news: %d cluster(s) gravado(s) em news_clusters", len(cluster_rows))
-    cluster_ids = _cluster_ids_by_canonical([c.canonical_article_id for c in clusters])
+    if clusters:
+        cluster_rows = [
+            {
+                "canonical_article_id": c.canonical_article_id,
+                "representative_title": c.representative_title,
+                "article_count": len(c.article_ids),
+                "unique_domains": _count_unique_domains(c.article_ids),
+                "first_seen": c.first_seen,
+                "last_seen": c.last_seen,
+                "dedup_method": "title_hash+rapidfuzz",
+                "dedup_version": "dedup_v1",
+            }
+            for c in clusters
+        ]
+        # upsert por canonical_article_id (chave natural -- ver migration
+        # news_clusters_canonical_article_key): reexecutar atualiza o mesmo
+        # cluster em vez de criar outro. Upsert aqui e seguro porque
+        # canonical_article_id nao e a coluna identity da tabela.
+        upsert_many(
+            "news_clusters", cluster_rows, conflict_columns=["canonical_article_id"],
+            update_columns=[
+                "representative_title", "article_count", "unique_domains",
+                "first_seen", "last_seen", "dedup_method", "dedup_version",
+            ],
+        )
+        logger.info("analyze-news: %d cluster(s) gravado(s) em news_clusters", len(cluster_rows))
+        cluster_ids = _cluster_ids_by_canonical([c.canonical_article_id for c in clusters])
+        for cluster in clusters:
+            cluster_id = cluster_ids[cluster.canonical_article_id]
+            for article_id in cluster.article_ids:
+                assignments[article_id] = (cluster_id, article_id == cluster.canonical_article_id)
 
     # UPDATE puro, nao upsert: article_id e GENERATED ALWAYS AS IDENTITY --
     # Postgres rejeita qualquer INSERT com valor explicito nessa coluna, e
@@ -148,13 +153,9 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
     # gargalo real na Fase 1.1 (milhares de round-trips HTTP pro backend REST
     # so pra clusters de republicacao de PETR4/VALE3/ITUB4 -- minutos de
     # latencia de rede pura por uma operacao que e uma unica instrucao SQL).
-    assignments = [
-        (article_id, cluster_ids[cluster.canonical_article_id], article_id == cluster.canonical_article_id)
-        for cluster in clusters
-        for article_id in cluster.article_ids
-    ]
-    logger.info("analyze-news: aplicando %d atribuicoes de cluster em lotes de %d", len(assignments), _UPDATE_BATCH_SIZE)
-    _apply_cluster_assignments(assignments)
+    rows = [(article_id, cluster_id, is_canonical) for article_id, (cluster_id, is_canonical) in assignments.items()]
+    logger.info("analyze-news: aplicando %d atribuicoes de cluster em lotes de %d", len(rows), _UPDATE_BATCH_SIZE)
+    _apply_cluster_assignments(rows)
     logger.info("analyze-news: atribuicoes de cluster aplicadas")
 
     return {
@@ -167,9 +168,10 @@ def _dedupe_articles_for_ticker(instrument_id: int) -> dict[str, int]:
 _UPDATE_BATCH_SIZE = 1000
 
 
-def _apply_cluster_assignments(assignments: list[tuple[int, int, bool]]) -> None:
-    """``assignments``: ``(article_id, cluster_id, is_canonical)``. Um UPDATE
-    por lote via ``VALUES``, nao um por linha (ver comentario no chamador)."""
+def _apply_cluster_assignments(assignments: list[tuple[int, int | None, bool]]) -> None:
+    """``assignments``: ``(article_id, cluster_id, is_canonical)``, ``cluster_id
+    None`` pra artigo fora de qualquer cluster. Um UPDATE por lote via
+    ``VALUES``, nao um por linha (ver comentario no chamador)."""
     total_batches = (len(assignments) + _UPDATE_BATCH_SIZE - 1) // _UPDATE_BATCH_SIZE
     for batch_num, start in enumerate(range(0, len(assignments), _UPDATE_BATCH_SIZE), start=1):
         chunk = assignments[start : start + _UPDATE_BATCH_SIZE]
@@ -183,21 +185,6 @@ def _apply_cluster_assignments(assignments: list[tuple[int, int, bool]]) -> None
             params,
         )
         logger.info("analyze-news: lote de atribuicao %d/%d aplicado", batch_num, total_batches)
-
-
-def _reset_cluster_assignments(instrument_id: int) -> None:
-    # Subquery em vez de literal `IN (id1, id2, ...)`: uma lista com dezenas
-    # de milhares de IDs (PETR4 tem 166 mil artigos) estourava o parser SQL
-    # do Postgres via exec_sql (500 Internal Server Error, provavel limite de
-    # profundidade de recursao pra expressoes IN muito longas). A mesma
-    # condicao do SELECT que populou `articles` acima, sem materializar IDs.
-    execute(
-        "update public.news_articles set duplicate_cluster_id = null, is_cluster_canonical = false "
-        "where article_id in ("
-        "  select article_id from public.news_company_links where instrument_id = %s"
-        ")",
-        [instrument_id],
-    )
 
 
 def _cluster_ids_by_canonical(canonical_article_ids: list[int]) -> dict[int, int]:
