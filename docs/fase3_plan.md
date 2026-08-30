@@ -123,10 +123,18 @@ sinal, ML. Nenhuma metodologia da Fase 2 muda.
   aplicada)".
 - Nenhuma DDL nova rodada no M0.
 
-## M1 — universo histórico / survivorship bias (em andamento)
+## M1 — universo histórico / survivorship bias (**concluído**, 2026-08-30)
 
 Ordem: Handoff v2 §14, passos 6–17. Schemas reais validados e mapeamento completo em
-[`docs/historical_universe.md`](historical_universe.md) §3.
+[`docs/historical_universe.md`](historical_universe.md) §3. **Resultado completo com números
+reais: [`docs/historical_universe.md`](historical_universe.md) §6.**
+
+Resumo: `companies` 3→2530; `company_lifecycle` 2566 linhas (663 registered / 1895 canceled /
+8 suspended); `instrument_lifecycle` 1448 (778 c/ ticker, 670 s/ ticker pré-2018);
+FCA 2010–2026; 0 `NOT_ELIGIBLE_DATA` (171 resolvidos por fallback); VALE 2012 (ON+PNA/VALE5)
+≠ 2020+ (VALE3); anti-survivorship, invariância à proveniência, look-ahead-regression e
+idempotência todos verdes; 33 testes novos; `pytest` 496 / `ruff` / `mypy` limpos.
+**Não mergeado em `main`.**
 
 ### Validação de schema (passo 6) — feita 2026-08-30
 

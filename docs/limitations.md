@@ -103,12 +103,26 @@ que os dados **não** conseguem sustentar é parte do produto, não uma ressalva
 
 ## Universo e viés
 
-- **Survivorship bias não está resolvido.** O universo atual só tem empresas vivas. Ações
-  deslistadas precisam de tratamento antes de qualquer backtest da Fase 3.
-- **Histórico de tickers é incompleto.** A estrutura (`ticker_aliases`) existe, mas não está
-  populada com trocas históricas de código.
-- **Universo pequeno.** Três empresas escolhidas para exercitar casos distintos
-  (commodity, estatal, banco), não para representar o mercado.
+- **Survivorship bias — universo histórico estrutural construído na Fase 3 M1**
+  (`docs/historical_universe.md`). `company_lifecycle` cobre 2530 companhias da CVM
+  (663 ativas + 1895 canceladas + 8 suspensas), com intervalo efetivo `DT_REG`→`DT_CANCEL`.
+  `get_investable_universe_as_of(D)` reconstrói o universo por **tempo efetivo**, incluindo
+  empresas canceladas em datas anteriores ao cancelamento. Regra bitemporal: proveniência
+  (`source_*`) nunca é gate — mexer nela ±10 anos não altera o universo (testado).
+  **O que ainda falta** (V1): filtros de liquidez/dados (M2), preço da cauda de deslistadas
+  (yfinance para após o delisting), composição histórica de índice.
+- **Histórico de tickers — parcial.** `instrument_lifecycle` tem 1448 linhas, mas
+  `Codigo_Negociacao` da FCA só existe a partir de 2018 → 670 linhas sem ticker (classe +
+  datas presentes, `quality_flag='incomplete'`). Trocas de ticker são detectáveis mas a
+  data exata da troca tem precisão de ~1 ano (a FCA dá a data de listagem da *classe*, não
+  do ticker). Classes PN históricas que a FCA não lista (VALE5) entram por seed manual.
+  `successor_company_id`/`predecessor_company_id` = NULL (a fonte dá o tipo do evento, não o
+  sucessor).
+- **Universo de fundamentos/valuation ainda pequeno.** Três empresas (PETR4/VALE3/ITUB4)
+  com fundamentos, quality e DCF calculados — escolhidas para exercitar casos distintos
+  (commodity, estatal, banco), não para representar o mercado. O universo histórico
+  estrutural (2530 companhias) existe para o backtest, mas só as 3 têm sinais calculados
+  até a expansão de universo (Fase 3 M14).
 
 ## Infraestrutura
 

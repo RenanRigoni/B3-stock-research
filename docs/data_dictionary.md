@@ -19,8 +19,10 @@ esse arquivo é a fonte da verdade. Este documento é um mapa de navegação, n�
 | Tabela | Papel |
 |---|---|
 | `instruments` | Cadastro mestre. `ticker` **não** é identificador eterno — toda FK usa `instrument_id`. `company_id` (FK nullable) liga o ticker à companhia emissora. |
-| `companies` | Entidade emissora (empresa legal, chave natural = CNPJ). Uma companhia tem 1+ instrumentos (PETR3 + PETR4). Fundamentos e valuation da Fase 2 agregam por `company_id`, nunca por `instrument_id` (fase2_plan.md §4/§19). |
-| `ticker_aliases` | Tickers históricos (evita survivorship bias quando um código muda de dono). |
+| `companies` | Entidade emissora (empresa legal, chave natural = CNPJ). Uma companhia tem 1+ instrumentos (PETR3 + PETR4). Fundamentos e valuation da Fase 2 agregam por `company_id`, nunca por `instrument_id` (fase2_plan.md §4/§19). Fase 3 M1 populou com **todas as 2530 companhias** do cadastro CVM (não só as 3 curadas). |
+| `company_lifecycle` | Ciclo de vida da companhia (Fase 3 M1). `valid_from`/`valid_to` = **tempo efetivo** (`DT_REG`→`DT_CANCEL` da CVM) e são o **único gate** de elegibilidade do universo histórico. `registration_status` (registered/canceled/suspended), `reason`/`reason_category` (de `MOTIVO_CANCEL`), `issuer_status`. `source_available_from`/`source_observed_at`/`ingested_at` = **tempo de transação**, NUNCA gate (rename deliberado vs. `available_from`). Ver `docs/historical_universe.md` + `fase3_handoff_v2.md` §4.1. *(migração `20260830044424`)* |
+| `instrument_lifecycle` | Ciclo de vida do instrumento/classe (Fase 3 M1). `valid_from`/`valid_to`/`listing_start`/`listing_end` = tempo efetivo (negociação real, da CVM FCA). `ticker` (`Codigo_Negociacao`) **nullable — NULL antes de 2018** (a FCA não informa; `quality_flag='incomplete'`); `share_class` + `company_id` discriminam. `source_*` = tempo de transação, nunca gate. Fonte `cvm_fca` + `seed_manual` (classes históricas que a FCA não lista, ex.: VALE5). Ver `docs/historical_universe.md` + `fase3_handoff_v2.md` §4.2. *(migração `20260830044442`)* |
+| `ticker_aliases` | Tickers históricos (evita survivorship bias quando um código muda de dono). Fase 3 M1 semeou VALE5. |
 | `company_aliases` | Termos de busca de notícias por empresa. `is_strong` distingue alias inequívoco ("Petrobras") de ambíguo ("Vale" isolado). |
 | `trading_calendar` | Calendário de pregões derivado do benchmark. `trading_day_index` é a base de toda aritmética D+N. |
 

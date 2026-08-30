@@ -508,6 +508,27 @@ fechar com `pytest` + `ruff check .` + `mypy src` verdes (`fase3.md` §89).
 
 **Não fazer merge em `main` sem autorização explícita** (`fase3.md` §91).
 
+### M1 — universo histórico / survivorship bias (**concluído**, 2026-08-30)
+
+- 2 tabelas novas aditivas: `company_lifecycle`, `instrument_lifecycle` (migrations
+  `20260830044424` / `20260830044442`, aplicadas via
+  `mcp__claude_ai_Supabase__apply_migration` no projeto `bdppudbcjosznkfucekm`; ledger OK).
+- Regra bitemporal (Handoff §1-§6): elegibilidade histórica só por **tempo efetivo**;
+  colunas de proveniência renomeadas (`source_available_from`/`source_observed_at`/
+  `ingested_at`) para nunca virarem gate. Exceção **enumerada** às 2 tabelas de lifecycle.
+- Ingestão real: cadastro CVM `cad_cia_aberta.csv` → `companies` 3→**2530** +
+  `company_lifecycle` **2566** linhas (663 registered / 1895 canceled / 8 suspended;
+  cancelamentos: 899 regulatory, 608 voluntary, 291 incorporation, 15 bankruptcy).
+  FCA `fca_cia_aberta_valor_mobiliario_*` 2010–2026 → `instrument_lifecycle` **1448**
+  (778 c/ ticker, 670 s/ ticker — FCA não traz `Codigo_Negociacao` antes de 2018).
+- `analytics/universe.py`: `select_investable_universe` (função pura, espelha
+  `select_point_in_time`) + `get_investable_universe_as_of(D)` — predicado do Handoff §6,
+  **não expõe** `valid_to`/`listing_end`. Sem materialização.
+- VALE (`fase3.md` §10): estrutura 2012 = {ON, PNA/VALE5} ≠ 2020+ = {VALE3}. Confirmado.
+- 33 testes novos (Handoff §15 itens 1-18). `pytest` 496 / `ruff` / `mypy` limpos.
+- Detalhe e limitações: [`docs/historical_universe.md`](historical_universe.md) §6.
+- **M2+ não iniciado. Sem merge em `main`.**
+
 ### M0 — checkpoint (**concluído**, 2026-08-30)
 
 - Branch `fase3-backtesting-engine` criada a partir de `main` (`f80c666`).

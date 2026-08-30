@@ -222,3 +222,100 @@ Contagens reais por categoria entram no relatório do M1.
    são autoritativas para negociabilidade; `company_lifecycle` dá status/motivo/sucessor e
    teto de fallback. Divergência com ambas presentes → linha em `quality_findings`, mantém a
    data do instrumento, flagged. Nunca `AND` estrito que encolhe o universo em silêncio.
+
+---
+
+## 6. Resultado do M1 (executado 2026-08-30, contra dados reais)
+
+### Ingestão
+
+| | valor |
+|---|---|
+| `companies` (total após M1) | **2530** (era 3; +2527 do cadastro CVM) |
+| `company_lifecycle` linhas | **2566** (2530 companhias + 36 intervalos extras de CNPJs com múltiplos registros) |
+| — `registered` | 663 |
+| — `canceled` | 1895 |
+| — `suspended` | 8 |
+| CNPJs com >1 registro no cadastro | 140 (147 linhas extras; 36 viram intervalo distinto) |
+| `instrument_lifecycle` linhas | **1448** (1447 `cvm_fca` + 1 `seed_manual`) |
+| — com ticker | 778 |
+| — sem ticker (FCA pré-2018) | 670 |
+| — tickers distintos | 757 |
+| — `trading` / `delisted` | 508 / 940 |
+| — quality: estimated / ok / inconsistent / incomplete | 868 / 537 / 22 / 21 (**0 `missing_input`**) |
+| FCA anos ingeridos | 2010–2026 (17) |
+| candidatos FCA → intervalos mesclados | 8595 → 1467 |
+| `fallback_valid_from` (data efetiva NULL → `company.valid_from`) | 171 |
+| `NOT_ELIGIBLE_DATA` (sem fallback) | **0** |
+| `derived_listing_end` (instrumento sumiu do FCA) | 827 |
+| `source_disagreement` (cadastro × FCA > 180d) → `quality_findings` | 240 |
+
+### Cobertura temporal
+
+- `company_lifecycle.valid_from`: 1923-05-23 → 2026-07-17. `cvm_cancel_date`: 1984 → 2026.
+- `instrument_lifecycle.valid_from`: 1926 → 2026.
+- Universo investível (companhias / instrumentos elegíveis) por data:
+  2011 → 657 / 570 · 2014 → 646 / ~570 · 2020 → 604 / 494 · 2024 → 692 / 524 · 2026 → 664 / 481.
+
+### Cancelamentos por categoria (`reason_category`)
+
+regulatory 899 · voluntary_delisting 608 · incorporation 291 · other 80 ·
+bankruptcy_liquidation 15 · (sem motivo) 2.
+
+### VALE — validação obrigatória (`fase3.md` §10)
+
+`instrument_lifecycle` da VALE (company_id 2):
+
+| classe | ticker | valid_from | valid_to | fonte | flag |
+|---|---|---|---|---|---|
+| ON | *(NULL — FCA pré-2018)* | 2003-12-12 | 2017-12-31 | cvm_fca | estimated |
+| ON | VALE3 | 2017-12-22 | *(vigente)* | cvm_fca | ok |
+| PNA | VALE5 | 2000-01-01 | 2017-12-22 | seed_manual | estimated |
+
+`get_investable_universe_as_of`: **2012 → {ON, PNA(VALE5)}** ; **2020/2024 → {ON/VALE3}**.
+A estrutura acionária de 2012 é comprovadamente diferente da de 2020+. Corrobora
+`share_count_history`: VALE PN = 2.108.579.618 ações (2010–2016) → 12 (2017+).
+
+### Anti-survivorship — validação
+
+`SETIBA PARTICIPAÇÕES S/A` (cancelada 2014-01-08): **presente** no universo de 2013,
+**ausente** no de 2016. Conhecer o cancelamento (snapshot CVM baixado em 2026) nunca a
+exclui de datas anteriores ao cancelamento efetivo.
+
+### Invariância à proveniência
+
+`test_universe_is_invariant_to_provenance_dates` (fixture) **passa**; e verificado também
+contra o **dado real do banco**: deslocar `source_available_from` / `source_observed_at` /
+`ingested_at` em ±10 anos → universo idêntico (646 companhias / 968 instrumentos em
+2014-06-15, os dois sentidos). `analytics/universe.py` não referencia nenhuma coluna
+`source_*` em `WHERE` (só no docstring do contrato).
+
+### Idempotência
+
+`sync-cvm-lifecycle --stage all` rodado 2×: `company_lifecycle` 2566, `instrument_lifecycle`
+1448, `companies` 2530 — contagens idênticas.
+
+### Limitações reais do M1 (V1)
+
+1. **`Codigo_Negociacao` da FCA vazio 2010–2017.** 670/1448 linhas de
+   `instrument_lifecycle` sem ticker (classe + datas presentes; `quality_flag='incomplete'`).
+2. **`valid_from` de ticker é a data de listagem da CLASSE, não do ticker.** Tickers
+   sucessivos (SSBR3→ALSO3→ALOS3) chegam todos com o mesmo `Data_Inicio_Negociacao`. O
+   universo colapsa para 1 ticker por `(company, classe)` na data usando a regra do
+   "intervalo mais apertado" — heurística V1, não a data exata da troca. Precisão de troca
+   de ticker: ~1 ano, lado do fim (`derived_listing_end`).
+3. **VALE5 / PETR4-PN históricos entram por seed manual**, não por ingestão — a FCA não
+   lista a classe PN dessas companhias nos anos antigos. Só VALE5 foi semeada (o caso
+   obrigatório); outras classes PN históricas ficam para expansão de universo (M14).
+4. **`successor_company_id` / `predecessor_company_id` = NULL** em toda linha. `MOTIVO_CANCEL`
+   dá o tipo (`incorporation` etc.) mas não nomeia o sucessor. Curadoria/fonte adicional
+   fica para depois.
+5. **Universo de instrumentos < universo de companhias** em toda data: nem toda companhia
+   registrada tem linha de ação na FCA (ou só tem linha code-less pré-2018 que ganhou
+   `listing_end` derivado). O gate **companhia** é o anti-survivorship confiável; o gate
+   **instrumento** é parcial no M1.
+6. **`cad_cia_aberta.csv` é snapshot** — sem histórico de transições de `SIT`/razão social.
+   `DT_REG`/`DT_CANCEL` bastam para o intervalo efetivo, mas mudanças intermediárias de
+   status não são reconstruíveis.
+7. **20 intervalos FCA descartados** por CNPJ ausente de `companies` (empresas no FCA que
+   não estão no cadastro atual — muito antigas/estrangeiras).
