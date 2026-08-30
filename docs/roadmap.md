@@ -508,6 +508,28 @@ fechar com `pytest` + `ruff check .` + `mypy src` verdes (`fase3.md` §89).
 
 **Não fazer merge em `main` sem autorização explícita** (`fase3.md` §91).
 
+### M2 — universo investível (**concluído com escalada pendente**, 2026-08-30)
+
+- Camada investível sobre a estrutural:
+  `structural → resolution → price link → liquidity → minimum data → ELIGIBLE`.
+  Cada reprovação com motivo explícito e **contada** (soma bate com o estrutural).
+- `resolution_status(row, D)`: `resolved` / `back_projected` / `unresolved_no_code` /
+  `unresolved_invalid_code` / `seeded`. Migração `20260830055948`
+  (`source_reference_year_first`) para saber quando o ticker passou a ser observável.
+- `liquidity_metrics` (migração `20260830060954`): **24.822 linhas**, `close` BRUTO × volume
+  (`adj_close` proibido, com teste de AST), janelas de 20/60 **pregões**.
+- `instruments`: 7 → **695** (688 históricos, todos `active=false`, zero colisões).
+  **Nenhum preço baixado.**
+- Cobertura real: universo investível **vazio antes de 2018** (a FCA não publica ticker) e
+  **5 papéis** de 2018 em diante (`daily_prices` cobre 5 de 694 ações).
+- 3 bugs reais corrigidos com regressão: `ON` lido como booleano pelo YAML 1.1;
+  `instrument_id` obsoleto no lifecycle; teto de cancelamento vindo de registro superado
+  (tirava ITUB3/ITUB4 do universo desde 2003).
+- 36 testes novos. `pytest` 548 / `ruff` / `mypy` limpos.
+- **ESCALADA ABERTA**: 8 datas (2010–2017) na banda `severe`; limiares de liquidez aguardando
+  aprovação do Opus. Detalhe: [`docs/historical_universe.md`](historical_universe.md) §9.
+- **M3 não iniciado. Sem merge em `main`.**
+
 ### M1 — universo histórico / survivorship bias (**concluído**, 2026-08-30)
 
 - 2 tabelas novas aditivas: `company_lifecycle`, `instrument_lifecycle` (migrations

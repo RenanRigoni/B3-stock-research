@@ -319,3 +319,179 @@ contra o **dado real do banco**: deslocar `source_available_from` / `source_obse
    status não são reconstruíveis.
 7. **20 intervalos FCA descartados** por CNPJ ausente de `companies` (empresas no FCA que
    não estão no cadastro atual — muito antigas/estrangeiras).
+
+---
+
+## 7. Universo INVESTÍVEL (Fase 3 M2)
+
+### 7.1 As duas camadas
+
+```
+structural_universe(D)  = companhia/instrumento existia e NEGOCIAVA em D
+                          (só TEMPO EFETIVO do lifecycle — §2, inalterado)
+
+investable_universe(D)  = structural
+                          + instrumento identificável   (resolution)
+                          + série de preço ligada        (price link)
+                          + liquidez suficiente          (liquidity)
+                          + dados mínimos                (data minimums)
+```
+
+Uma companhia em `company_lifecycle` **nunca** vira ativo investível automaticamente. A
+sequência é obrigatória e **cada reprovação tem motivo explícito e é contada** — a soma de
+elegíveis + reprovados bate sempre com o total estrutural (testado contra dado real em 2013,
+2020 e 2024).
+
+Motivos (vocabulário fechado): `NOT_ELIGIBLE_DATA`, `unresolved_instrument`,
+`back_projected_instrument`, `no_price_link`, `illiquid`, `insufficient_trading_history`,
+`insufficient_data`.
+
+### 7.2 `resolution_status(row, D)` — identificabilidade
+
+**Não é coluna estática** — é função de `(linha, D)`. A mesma linha de `ALOS3`
+(`valid_from` 2011, primeira FCA 2023) é `resolved` em 2024 e `back_projected` em 2013.
+
+| status | condição |
+|---|---|
+| `resolved` | ticker casa o formato B3 **e** `source_reference_year_first <= year(D)` |
+| `back_projected` | ticker bem-formado, mas a primeira FCA que o reportou é posterior a D |
+| `unresolved_no_code` | `ticker IS NULL` (FCA pré-2018) |
+| `unresolved_invalid_code` | ticker presente mas fora do formato (os 82 valores de texto livre) |
+| `seeded` | `source='seed_manual'` — curadoria, sempre `estimated` |
+
+Só `resolved` e `seeded` são identificáveis. O sufixo `B` entra no regex de propósito:
+`ETRO3B`, `QVQP3B`, `OPSE3B` são códigos reais de Bovespa Mais, não lixo.
+
+`source_reference_year_first` (migração `20260830055948`) é **tempo de transação** e entra
+**apenas** na camada investível. Isso **não** é o bug bitemporal da v1: a v1 dizia "o
+pipeline baixou em 2026, logo nada é elegível em 2013" (falso — a existência era pública);
+aqui é "nenhuma fonte, presente ou passada, diz qual era o ticker em 2013, logo não há como
+ligar série de preço" (verdadeiro, conservador, e **medido**).
+
+### 7.3 Colapso de nomenclatura
+
+Granularidade do universo estrutural: **uma entrada por `(company_id, share_class)`**.
+`SSBR3` → `ALSO3` → `ALOS3` são a **mesma** ação ordinária da ALLOS; contá-las como três
+inflaria `structural_instruments`. A variante escolhida em D é a de melhor
+`resolution_status` e, entre `resolved`, a de ticker **observado mais recente que já existia
+em D** — nunca o ticker atual retroagido. As demais entram em `naming_variants_collapsed`.
+
+Verificado contra dado real: ALLOS 2020 → `ALSO3` (observado 2019), 2024 → `ALOS3`
+(observado 2023), 2013 → `back_projected` (a FCA não publicava código).
+
+### 7.4 `instruments` = identidade, não elegibilidade
+
+688 instrumentos históricos identificados cadastrados no M2 (695 no total). Regras:
+
+- Só `resolution_status` em `{resolved, seeded}`. `NÃO HÁ` / `000000` **nunca** viram
+  instrumento.
+- Todos `active = false`. **`active` é escopo operacional dos pipelines, não vigência** —
+  ligar para `true` faria 688 tickers entrarem em `sync-prices --all` sem autorização.
+- `valid_from` / `valid_to` permanecem NULL: vigência é do `instrument_lifecycle`, fonte única.
+- Zero colisões de ticker entre companhias (verificado antes do backfill).
+
+---
+
+## 8. `liquidity_metrics` (M2)
+
+Tabela própria, **nunca** `fundamental_metrics`: dado de mercado não tem semântica de
+`available_from`, e forçá-la fabricaria um gate falso no ponto exato que a Fase 1/2 protege.
+
+- **Volume financeiro = `close` BRUTO × volume.** `adj_close` é **proibido** — é recalculado
+  retroativamente a partir de proventos e splits *futuros* (a Fase 1.1 mediu 81% das linhas
+  do PETR4 mudando entre duas leituras da mesma série ajustada). Há teste que varre o AST dos
+  módulos e falha se `adj_close` aparecer em qualquer string executável.
+- Janelas de **20 e 60 pregões** via `trading_calendar`, nunca dias corridos.
+- Média sobre a janela **esperada** (pregão sem negócio = volume zero) — dividir só pelos dias
+  negociados superestimaria papel ilíquido. `trading_days_*` × `expected_trading_days_*`
+  expõem a esparsidade.
+- **Mediana de 60** além da média: um leilão isolado infla a média de 20 dias.
+- Só `trade_date <= as_of_date`.
+
+Estado: **24.822 linhas**, 6 instrumentos, 2010-01-04 → 2026-08-26.
+
+---
+
+## 9. Resultado do M2 (executado 2026-08-30, dados reais)
+
+### 9.1 Cobertura por data
+
+| data | struct. co | struct. inst | resolved | c/ preço | investível | unresolved | banda |
+|---|---|---|---|---|---|---|---|
+| 2010-06-30 | 647 | 574 | 1 | 0 | 0 | 99,8% | **severe** |
+| 2011-06-30 | 653 | 577 | 1 | 0 | 0 | 99,8% | **severe** |
+| 2012-06-30 | 638 | 568 | 1 | 0 | 0 | 99,8% | **severe** |
+| 2013-06-30 | 645 | 586 | 1 | 0 | 0 | 99,8% | **severe** |
+| 2014-06-30 | 647 | 588 | 1 | 0 | 0 | 99,8% | **severe** |
+| 2015-06-30 | 636 | 562 | 1 | 0 | 0 | 99,8% | **severe** |
+| 2016-06-30 | 623 | 557 | 1 | 0 | 0 | 99,8% | **severe** |
+| 2017-06-30 | 611 | 546 | 1 | 0 | 0 | 99,8% | **severe** |
+| 2018-06-30 | 610 | 531 | 363 | 5 | 5 | 31,6% | high |
+| 2019-06-30 | 607 | 507 | 391 | 5 | 5 | 22,9% | moderate |
+| 2020-06-30 | 601 | 491 | 402 | 5 | 5 | 18,1% | moderate |
+| 2021-06-30 | 674 | 540 | 436 | 5 | 5 | 19,3% | moderate |
+| 2022-06-30 | 720 | 551 | 448 | 5 | 5 | 18,7% | moderate |
+| 2023-06-30 | 691 | 538 | 444 | 5 | 5 | 17,5% | moderate |
+| 2024-06-30 | 692 | 518 | 436 | 5 | 5 | 15,8% | moderate |
+| 2025-06-30 | 685 | 503 | 425 | 5 | 5 | 15,5% | moderate |
+| 2026-06-30 | 664 | 478 | 403 | 5 | 5 | 15,7% | moderate |
+
+Motivos de inelegibilidade (soma das 17 datas): `no_price_link` 3.711 ·
+`back_projected_instrument` 3.413 · `unresolved_instrument` 2.046 · `NOT_ELIGIBLE_DATA` 0 ·
+`illiquid` 0 · `insufficient_trading_history` 0 · `insufficient_data` 0.
+
+### 9.2 A descontinuidade de 2018 e o gate dominante
+
+**Duas barreiras distintas, em ordem de severidade:**
+
+1. **2010–2017: identificação.** A FCA não publica `Codigo_Negociacao` antes de 2018 →
+   `unresolved_rate` de **99,8%** e universo investível **vazio**, mesmo para PETR4/VALE3/ITUB4,
+   que têm preço e fundamentos completos desde 2010. Não é falta de dado de mercado — é
+   impossibilidade de dizer *qual papel* cada linha do lifecycle era.
+2. **2018+: cobertura de preço.** A identificação melhora (363→448 resolvidos), mas
+   `daily_prices` cobre **5 ações de 694** (0,7%). `no_price_link` reprova ~430 instrumentos
+   por data. O universo investível é de **5 papéis** (PETR3, PETR4, VALE3, ITUB3, ITUB4).
+
+**Os gates de liquidez e dados mínimos nunca chegam a reprovar ninguém** — tudo já foi
+barrado antes. Por isso os limiares são, hoje, irrelevantes para o tamanho do universo.
+
+### 9.3 Sensibilidade de limiares (para a decisão do Opus)
+
+`investable_instruments` por limiar de `min_avg_financial_volume_60`:
+
+| limiar | 2013 | 2018 | 2020 | 2024 | 2026 |
+|---|---|---|---|---|---|
+| sem limiar | 0 | 5 | 5 | 5 | 5 |
+| R$ 1 M | 0 | 5 | 5 | 5 | 5 |
+| R$ 5 M | 0 | 4 | 5 | 5 | 5 |
+| R$ 10 M | 0 | 4 | 5 | 5 | 5 |
+| R$ 50 M | 0 | 4 | 4 | 4 | 5 |
+| R$ 100 M | 0 | 4 | 4 | 4 | 5 |
+| R$ 500 M | 0 | 3 | 3 | 3 | 4 |
+| R$ 1.000 M | 0 | 1 | 3 | 2 | 3 |
+
+Por `min_trading_days_60`: 5 investíveis para qualquer limiar de 1 a 55; cai para 4 em 2024
+com limiar 60 (VALE3 teve 59 pregões com negócio na janela).
+
+Distribuição real de `avg_financial_volume_60` (BRL/pregão), 2026-06-30: PETR4 2.091 M ·
+VALE3 1.527 M · ITUB4 1.230 M · PETR3 618 M · ITUB3 159 M. Em 2013: PETR4 572 M ·
+ITUB4 342 M · PETR3 168 M · VALE3 168 M · **ITUB3 6,2 M** (o único que um limiar de
+R$ 10 M excluiria).
+
+**Nenhum limiar foi escolhido.** `config/backtest_universe_v1.yaml` mantém
+`status: awaiting_opus_thresholds` e `null` em todos — `null` significa gate **não aplicado**,
+nunca número inventado (`fase3.md` §15).
+
+### 9.4 Limitações reais do M2
+
+1. **Universo investível vazio antes de 2018.** Nenhum backtest é possível em 2010–2017 sob a
+   regra estrita de identificação. Banda `severe` em 8 das 17 datas → gatilho de escalada.
+2. **Cobertura de preço de 5/694 (0,7%)** é o gate dominante de 2018 em diante. O universo
+   investível de 5 papéis não sustenta conclusão estatística sobre "o mercado brasileiro".
+3. **Liquidez e dados mínimos nunca reprovam** — inertes até a cobertura de preço crescer.
+4. **20 intervalos degenerados** (`valid_from = valid_to`) permanecem no `instrument_lifecycle`,
+   marcados `inconsistent` — instrumentos cujas datas efetivas da FCA já eram inconsistentes.
+5. **`share_class` divergente em 2 tickers** (`CGRA4` como ON, `CRTE3` como PN na FCA) —
+   resolvido pelo ano de referência mais recente, registrado em `quality_findings`.
+6. **Gotcha do backend REST**: uma coluna aliasada `t` colide com o alias `t` do
+   `jsonb_agg(t)` dentro do RPC `exec_sql` e a linha inteira volta como escalar. Evitar `as t`.

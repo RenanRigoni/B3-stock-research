@@ -199,6 +199,26 @@ CLI `sync-cvm-lifecycle`; `analytics/universe.py` (`select_investable_universe` 
 `config/backtest_universe_v1.yaml`; `ticker_aliases` semeada; caso VALE validado; os 18 testes
 do Handoff §15.
 
+## M2 — universo investível (**concluído com escalada pendente**, 2026-08-30)
+
+Ordem: "HANDOFF PARA SONNET — M2" (Opus), 5 pré-requisitos + 10 passos.
+**Resultado completo:** [`docs/historical_universe.md`](historical_universe.md) §7-§9.
+
+Entregas: `source_reference_year_first` (migração `20260830055948`); validação de formato de
+ticker + `resolution_status(row, D)`; camada investível com as 5 etapas e contagem por motivo;
+`liquidity_metrics` (migração `20260830060954`, 24.822 linhas); `analytics/liquidity.py` puro
++ `pipelines/liquidity.py`; `analytics/universe_coverage.py` + CLI `universe-coverage`;
+688 instrumentos históricos em `instruments` (`active=false`); 36 testes novos.
+`pytest` 548 / `ruff` / `mypy` limpos.
+
+**Nenhum preço foi baixado** (Opus regra 4): `daily_prices` continua com 6 instrumentos.
+
+**Limiares NÃO escolhidos** (Opus regra 7): `config/backtest_universe_v1.yaml` mantém
+`awaiting_opus_thresholds` e `null` — tabela de sensibilidade em `historical_universe.md` §9.3.
+
+**ESCALADA ABERTA** (Opus regra 9): 8 das 17 datas (2010–2017) na banda `severe`
+(`unresolved_rate` 99,8%). Universo investível vazio antes de 2018.
+
 ### Decisões abertas (Handoff §13) — resolução V1 adotada, reversível
 
 - **Deslistadas em `instruments`**: só as do universo de teste + as que ganharem preço.

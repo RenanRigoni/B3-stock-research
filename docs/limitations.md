@@ -123,6 +123,25 @@ que os dados **não** conseguem sustentar é parte do produto, não uma ressalva
   (commodity, estatal, banco), não para representar o mercado. O universo histórico
   estrutural (2530 companhias) existe para o backtest, mas só as 3 têm sinais calculados
   até a expansão de universo (Fase 3 M14).
+- **Universo INVESTÍVEL é vazio antes de 2018 e tem 5 papéis depois** (Fase 3 M2, medido).
+  Duas barreiras distintas:
+  1. **2010–2017 — identificação.** A CVM FCA não publica `Codigo_Negociacao` antes de 2018;
+     `unresolved_rate` = **99,8%** (banda `severe`). Nem PETR4/VALE3/ITUB4, com preço e
+     fundamentos completos desde 2010, são identificáveis pelo lifecycle nesse período.
+     **Nenhum backtest é possível em 2010–2017** sob a regra estrita de identificação.
+  2. **2018+ — cobertura de preço.** `daily_prices` cobre **5 ações de 694** (0,7%);
+     `no_price_link` é o motivo dominante de reprovação. O universo investível é
+     PETR3/PETR4/VALE3/ITUB3/ITUB4.
+  Consequência: **nenhum resultado da Fase 3 pode ser generalizado para "o mercado
+  brasileiro"** enquanto isso não mudar. Os gates de liquidez e dados mínimos existem, estão
+  testados e nunca chegam a reprovar ninguém — tudo já foi barrado antes.
+- **Limiares de liquidez não definidos.** `config/backtest_universe_v1.yaml` mantém
+  `status: awaiting_opus_thresholds` com todos os valores `null` — `null` = gate **não
+  aplicado**, nunca número inventado. Tabela de sensibilidade em
+  `docs/historical_universe.md` §9.3.
+- **`liquidity_metrics` usa `close` bruto por decisão explícita.** Volume financeiro com
+  `adj_close` injetaria proventos e splits futuros numa métrica histórica — look-ahead
+  silencioso. Há teste que varre o AST e falha se `adj_close` aparecer no código.
 
 ## Infraestrutura
 
