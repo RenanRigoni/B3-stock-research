@@ -43,8 +43,10 @@ from stock_research.sources.fundamentals.cvm_common import (
 from stock_research.transforms.company_lifecycle import build_company_lifecycle
 from stock_research.transforms.fundamentals_facts import parse_date
 from stock_research.transforms.instrument_lifecycle import (
+    IDENTIFIABLE,
     build_instrument_candidate,
     merge_instrument_intervals,
+    resolution_status,
 )
 
 logger = get_logger(__name__)
@@ -223,19 +225,38 @@ def _ingest_instrument_lifecycle(
     ticker_to_instrument = {
         r["ticker"]: r["instrument_id"] for r in fetch_all("select instrument_id, ticker from public.instruments")
     }
+    # Teto de cancelamento (Handoff §5.2) tem de vir do registro VIGENTE, nao
+    # de um cancelamento superado. 140 CNPJs tem mais de um registro no cadastro
+    # (cancelamento seguido de re-registro): o Itau foi cancelado em 1998-04-08
+    # e re-registrado em 2002-12-30. Usar 1998 como teto de um instrumento que
+    # comeca em 2002 produzia listing_end < valid_from -> intervalo degenerado
+    # de 1 dia -> ITUB3/ITUB4 fora do universo desde 2003. Bug real do M1,
+    # exposto pelo M2, com teste de regressao.
     company_cancel: dict[int, date | None] = {}
     company_start: dict[int, date | None] = {}
+    latest_record: dict[int, date] = {}
     for r in fetch_all(
-        "select company_id, valid_from, cvm_cancel_date from public.company_lifecycle "
-        "where source = 'cvm_cad'"
+        "select company_id, valid_from, cvm_cancel_date, registration_status "
+        "from public.company_lifecycle where source = 'cvm_cad'"
     ):
+        cid = r["company_id"]
         cancel = parse_date(str(r["cvm_cancel_date"])[:10]) if r["cvm_cancel_date"] else None
         start = parse_date(str(r["valid_from"])[:10]) if r["valid_from"] else None
-        if cancel is not None:
-            company_cancel[r["company_id"]] = cancel
-        prev = company_start.get(r["company_id"])
-        if start is not None and (prev is None or start < prev):
-            company_start[r["company_id"]] = start
+
+        prev_start = company_start.get(cid)
+        if start is not None and (prev_start is None or start < prev_start):
+            company_start[cid] = start
+
+        # So o registro mais recente define o teto -- e so se ele proprio
+        # estiver cancelado.
+        if start is None:
+            continue
+        seen = latest_record.get(cid)
+        if seen is None or start >= seen:
+            latest_record[cid] = start
+            company_cancel[cid] = (
+                cancel if r["registration_status"] == "canceled" else None
+            )
 
     rows: list[dict[str, Any]] = []
     not_eligible_data = 0
@@ -443,6 +464,128 @@ _SEED_INSTRUMENTS: list[dict[str, Any]] = [
 ]
 
 
+def register_identified_instruments() -> dict[str, Any]:
+    """M2 passo 4: instrumentos historicos identificaveis -> ``instruments``.
+
+    ``instruments`` representa IDENTIDADE; disponibilidade de preco representa
+    ELEGIBILIDADE. Por isso o criterio de entrada e so
+    ``resolution_status ∈ {resolved, seeded}`` -- nunca "tem preco".
+
+    Regras duras (Opus, regras 2-4):
+
+    * ``unresolved_no_code`` / ``unresolved_invalid_code`` / ``back_projected``
+      **nao entram**. Nada de ``NAO HA`` / ``000000`` virando instrumento.
+    * Todos entram ``active = false``. ``active`` e escopo operacional dos
+      pipelines, NAO vigencia -- ligar para true faria 688 tickers entrarem em
+      ``sync-prices --all`` sem autorizacao.
+    * ``valid_from`` / ``valid_to`` ficam NULL: vigencia e do
+      ``instrument_lifecycle``, fonte unica.
+    * Nunca modifica linha existente (``update_columns=[]``).
+    """
+    run_id = start_run(PIPELINE, provider="cvm", params={"stage": "instruments"})
+    try:
+        today = date.today()
+        rows = fetch_all(
+            "select l.company_id, c.legal_name, l.ticker, l.share_class, l.source, "
+            "       l.source_reference_year, l.source_reference_year_first "
+            "from public.instrument_lifecycle l "
+            "join public.companies c on c.company_id = l.company_id"
+        )
+        identifiable = [r for r in rows if resolution_status(r, today) in IDENTIFIABLE]
+
+        # Um ticker pode aparecer com classes divergentes (a FCA erra: CGRA4
+        # como ON, CRTE3 como PN). Fica o conhecimento mais recente e a
+        # divergencia vira quality_finding -- nunca escolha silenciosa.
+        best: dict[str, dict[str, Any]] = {}
+        conflicts = 0
+        for r in identifiable:
+            tk = r["ticker"]
+            cur = best.get(tk)
+            if cur is None:
+                best[tk] = r
+                continue
+            if cur["share_class"] != r["share_class"]:
+                conflicts += 1
+                record_finding(
+                    run_id,
+                    PIPELINE,
+                    "share_class_conflict",
+                    "WARNING",
+                    f"{tk}: FCA reporta {cur['share_class']} e {r['share_class']}; "
+                    "mantida a do ano de referencia mais recente",
+                    entity_type="instrument",
+                    entity_id=tk,
+                )
+            if (r["source_reference_year"] or 0) > (cur["source_reference_year"] or 0):
+                best[tk] = r
+
+        existing = {r["ticker"] for r in fetch_all("select ticker from public.instruments")}
+        new_rows = [
+            {
+                "ticker": tk,
+                "exchange": "B3",
+                "company_name": r["legal_name"],
+                "cnpj": None,
+                "share_class": r["share_class"],
+                "asset_type": "stock",
+                "active": False,  # escopo de pipeline, nunca vigencia
+                "company_id": r["company_id"],
+                "notes": "instrumento historico identificado pela FCA (Fase 3 M2); "
+                "vigencia em instrument_lifecycle",
+            }
+            for tk, r in sorted(best.items())
+            if tk not in existing
+        ]
+        inserted = (
+            upsert_many(
+                "instruments", new_rows, conflict_columns=["ticker", "exchange"], update_columns=[]
+            )["total"]
+            if new_rows
+            else 0
+        )
+
+        # Religa instrument_lifecycle -> instruments. OBRIGATORIO aqui: o
+        # rebuild da FCA resolve `instrument_id` contra os instrumentos que
+        # existiam NAQUELE momento; rodar o rebuild antes deste cadastro deixa
+        # 1442 de 1448 linhas com instrument_id NULL, e o gate de price link
+        # (que precisa do instrument_id) reprovaria TUDO em silencio. Bug real,
+        # com teste de regressao.
+        relinked = _relink_lifecycle_instruments()
+
+        finish_run(run_id, status="success", records_inserted=inserted)
+        return {
+            "status": "success",
+            "identifiable_rows": len(identifiable),
+            "distinct_tickers": len(best),
+            "already_present": len(existing),
+            "inserted": inserted,
+            "share_class_conflicts": conflicts,
+            "relinked_lifecycle_rows": relinked,
+        }
+    except Exception as exc:
+        finish_run(run_id, status="failed", error_message=str(exc))
+        raise
+
+
+def _relink_lifecycle_instruments() -> int:
+    """``instrument_lifecycle.instrument_id`` <- ``instruments`` por ticker.
+
+    Idempotente. So preenche onde ha ticker; linha sem ticker continua NULL
+    (correto -- nao ha identidade a ligar).
+    """
+    execute(
+        "update public.instrument_lifecycle l "
+        "set instrument_id = i.instrument_id "
+        "from public.instruments i "
+        "where i.ticker = l.ticker and l.ticker is not null "
+        "  and l.instrument_id is distinct from i.instrument_id"
+    )
+    row = fetch_all(
+        "select count(*) as c from public.instrument_lifecycle where instrument_id is not null"
+    )
+    return int(row[0]["c"]) if row else 0
+
+
 def seed_manual_instruments() -> dict[str, Any]:
     run_id = start_run(PIPELINE, provider="seed", params={"stage": "seed_manual"})
     try:
@@ -555,11 +698,17 @@ def seed_manual_instruments() -> dict[str, Any]:
 
 
 def sync_all(*, from_year: int | None = None, to_year: int | None = None) -> dict[str, Any]:
-    """M1 completo: company lifecycle -> instrument lifecycle -> seed."""
+    """M1+M2: company lifecycle -> instrument lifecycle -> seed -> instruments."""
     company = sync_company_lifecycle()
     instrument = sync_instrument_lifecycle(from_year=from_year, to_year=to_year)
     seed = seed_manual_instruments()
-    return {"company": company, "instrument": instrument, "seed": seed}
+    registered = register_identified_instruments()
+    return {
+        "company": company,
+        "instrument": instrument,
+        "seed": seed,
+        "instruments": registered,
+    }
 
 
 def _count_by(rows: list[dict[str, Any]], key: str) -> dict[str, int]:

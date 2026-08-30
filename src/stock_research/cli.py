@@ -311,11 +311,12 @@ def sync_cvm_lifecycle(
     to_year: Annotated[int | None, typer.Option("--to-year")] = None,
     stage: Annotated[
         str,
-        typer.Option("--stage", help="all | company | instrument | seed"),
+        typer.Option("--stage", help="all | company | instrument | seed | instruments"),
     ] = "all",
 ) -> None:
-    """Universo historico (Fase 3 M1): cadastro CVM -> company_lifecycle;
-    FCA -> instrument_lifecycle; seed manual (VALE5). Ver docs/historical_universe.md."""
+    """Universo historico (Fase 3 M1/M2): cadastro CVM -> company_lifecycle;
+    FCA -> instrument_lifecycle; seed manual (VALE5); instrumentos identificados
+    -> instruments (active=false). Ver docs/historical_universe.md."""
     from stock_research.pipelines import historical_universe as hu
 
     if stage == "company":
@@ -324,11 +325,94 @@ def sync_cvm_lifecycle(
         out = {"instrument": hu.sync_instrument_lifecycle(from_year=from_year, to_year=to_year)}
     elif stage == "seed":
         out = {"seed": hu.seed_manual_instruments()}
+    elif stage == "instruments":
+        out = {"instruments": hu.register_identified_instruments()}
     else:
         out = hu.sync_all(from_year=from_year, to_year=to_year)
 
     for name, res in out.items():
         console.print(f"[bold]{name}[/]: {res}")
+
+
+@app.command(name="universe-coverage")
+def universe_coverage_cmd(
+    from_year: Annotated[int, typer.Option("--from-year")] = 2010,
+    to_year: Annotated[int, typer.Option("--to-year")] = 2026,
+    month: Annotated[int, typer.Option("--month", help="Mes da data anual.")] = 6,
+    day: Annotated[int, typer.Option("--day")] = 30,
+) -> None:
+    """Cobertura do universo por data (Fase 3 M2) -- mede o vies residual.
+
+    Mostra structural -> resolved -> with_prices -> investable, a taxa de
+    nao-resolvidos e a banda normativa. `severe` (>60%) e gatilho de escalada."""
+    from stock_research.analytics.universe_coverage import (
+        coverage_for_dates,
+        has_severe,
+        yearly_dates,
+    )
+    from stock_research.config import load_universe_config, thresholds_from_config
+
+    cfg = load_universe_config()
+    th = thresholds_from_config(cfg)
+    classes = cfg.get("eligibility", {}).get("allowed_share_classes")
+    rows = coverage_for_dates(
+        yearly_dates(from_year, to_year, month, day),
+        thresholds=th,
+        allowed_share_classes=frozenset(classes) if classes else None,
+    )
+
+    table = Table(title="Cobertura do universo", show_header=True, header_style="bold")
+    for col in ("data", "struct_co", "struct_inst", "resolved", "c/preco", "investivel", "unres%", "banda"):
+        table.add_column(col, justify="right")
+    for r in rows:
+        table.add_row(
+            str(r.as_of),
+            str(r.structural_companies),
+            str(r.structural_instruments),
+            str(r.resolved_instruments),
+            str(r.instruments_with_prices),
+            str(r.investable_instruments),
+            f"{r.unresolved_rate:.1%}",
+            r.unresolved_band,
+        )
+    console.print(table)
+
+    agg: dict[str, int] = {}
+    for r in rows:
+        for k, v in r.rejections.items():
+            agg[k] = agg.get(k, 0) + v
+    console.print("[bold]Motivos de inelegibilidade (soma das datas):[/]")
+    for k, v in sorted(agg.items(), key=lambda kv: -kv[1]):
+        console.print(f"  {k}: {v}")
+
+    severe = has_severe(rows)
+    if severe:
+        console.print(
+            f"\n[red]ESCALAR PARA OPUS[/]: {len(severe)} data(s) na banda `severe` "
+            f"(unresolved_rate > 60%): {', '.join(str(r.as_of) for r in severe)}"
+        )
+
+
+@app.command(name="compute-liquidity")
+def compute_liquidity_cmd(
+    from_date: Annotated[str | None, typer.Option("--from")] = None,
+    to_date: Annotated[str | None, typer.Option("--to")] = None,
+) -> None:
+    """Liquidez point-in-time (Fase 3 M2) -> liquidity_metrics.
+
+    Volume financeiro = close BRUTO x volume (nunca adj_close). Janelas de
+    20/60 pregoes via trading_calendar. NAO baixa preco -- so calcula sobre o
+    que ja existe em daily_prices."""
+    from stock_research.pipelines.liquidity import compute_liquidity
+
+    result = compute_liquidity(from_date=from_date, to_date=to_date)
+    console.print(
+        f"[green]liquidity_metrics[/]: {result['rows']} linha(s) em "
+        f"{result['instruments']} instrumento(s) "
+        f"({result['first_date']} -> {result['last_date']})"
+    )
+    for ticker, n in sorted(result["by_ticker"].items()):
+        console.print(f"  {ticker}: {n}")
 
 
 @app.command(name="sync-news")

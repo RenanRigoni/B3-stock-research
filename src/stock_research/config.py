@@ -150,3 +150,29 @@ def code_version() -> str:
 
     sha = os.environ.get("GIT_SHA", "")
     return f"{__version__}+{sha[:8]}" if sha else __version__
+
+
+def load_universe_config() -> dict[str, Any]:
+    """``config/backtest_universe_v1.yaml`` -- criterios do universo investivel."""
+    return _read_yaml("backtest_universe_v1.yaml")
+
+
+def thresholds_from_config(cfg: dict[str, Any] | None = None) -> Any:
+    """Limiares de investibilidade a partir da config versionada.
+
+    ``None`` num campo = limiar **ainda nao aprovado**: o gate correspondente
+    NAO e aplicado, a distribuicao e medida e reportada. Nunca inventar numero
+    aqui (`fase3.md` §15, Opus regra 7).
+    """
+    from stock_research.analytics.universe import InvestabilityThresholds
+
+    cfg = cfg if cfg is not None else load_universe_config()
+    liq = cfg.get("liquidity") or {}
+    dm = cfg.get("data_minimums") or {}
+    return InvestabilityThresholds(
+        min_avg_financial_volume_60=liq.get("min_avg_financial_volume_60"),
+        min_median_financial_volume_60=liq.get("min_median_financial_volume_60"),
+        min_trading_days_60=liq.get("min_trading_days_60"),
+        min_price_history_days=dm.get("min_price_history_days"),
+        require_fundamentals=dm.get("require_fundamentals"),
+    )
