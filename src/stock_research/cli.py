@@ -305,6 +305,32 @@ def sync_fre(
         raise typer.Exit(code=1)
 
 
+@app.command(name="sync-cvm-lifecycle")
+def sync_cvm_lifecycle(
+    from_year: Annotated[int | None, typer.Option("--from-year")] = None,
+    to_year: Annotated[int | None, typer.Option("--to-year")] = None,
+    stage: Annotated[
+        str,
+        typer.Option("--stage", help="all | company | instrument | seed"),
+    ] = "all",
+) -> None:
+    """Universo historico (Fase 3 M1): cadastro CVM -> company_lifecycle;
+    FCA -> instrument_lifecycle; seed manual (VALE5). Ver docs/historical_universe.md."""
+    from stock_research.pipelines import historical_universe as hu
+
+    if stage == "company":
+        out = {"company": hu.sync_company_lifecycle()}
+    elif stage == "instrument":
+        out = {"instrument": hu.sync_instrument_lifecycle(from_year=from_year, to_year=to_year)}
+    elif stage == "seed":
+        out = {"seed": hu.seed_manual_instruments()}
+    else:
+        out = hu.sync_all(from_year=from_year, to_year=to_year)
+
+    for name, res in out.items():
+        console.print(f"[bold]{name}[/]: {res}")
+
+
 @app.command(name="sync-news")
 def sync_news(
     ticker: Annotated[str | None, typer.Option("--ticker")] = None,

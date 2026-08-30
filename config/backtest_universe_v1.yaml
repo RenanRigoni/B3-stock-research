@@ -1,0 +1,41 @@
+# Universo investivel do backtest -- V1 (Fase 3 M1).
+# Ver docs/historical_universe.md e docs/fase3_handoff_v2.md §6, §11.
+#
+# Nenhum valor de criterio fica escondido no codigo (fase3.md §15). Esta
+# config e versionada; recalibrar = novo arquivo (v2), nunca editar o v1 em
+# silencio.
+
+version: backtest_universe_v1
+
+# Elegibilidade estrutural (M1). Decidida SO por tempo efetivo do lifecycle
+# (Handoff §6). NAO ha gate de proveniencia.
+eligibility:
+  # Empresas SUSPENSO(A) do cadastro CVM entram no universo estrutural?
+  # false = ficam de fora da camada investivel (ainda existem no lifecycle).
+  include_suspended: false
+  # Classe de acao aceita na V1. UNT/DR ficam para iteracao futura.
+  allowed_share_classes: [ON, PN, PNA, PNB]
+
+# Filtros de liquidez / dados minimos -- DEFERIDOS PARA O M2 (Handoff §11, §13.3).
+# Registrados aqui so para fixar a intencao; nenhum e aplicado no M1.
+liquidity:
+  status: deferred_to_m2
+  # placeholders (nao usados ainda):
+  min_avg_daily_financial_volume_brl: null
+  min_trading_days_trailing_252: null
+
+data_minimums:
+  status: deferred_to_m2
+  min_price_history_days: null
+  require_fundamentals: null
+
+# Proveniencia do universo (vintage). Preenchido pelo pipeline a cada rebuild.
+# Serve para backtest_runs.universe_version (spec §80) -- reprodutibilidade,
+# nunca elegibilidade.
+vintage:
+  cadastro_source: cvm_cad
+  fca_source: cvm_fca
+  fca_years: "2010..corrente"
+  notes: >
+    ticker (Codigo_Negociacao) so existe no FCA a partir de 2018;
+    antes disso instrument_lifecycle.ticker = NULL, quality_flag = incomplete.
