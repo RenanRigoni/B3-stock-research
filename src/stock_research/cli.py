@@ -428,6 +428,65 @@ def compute_price_windows_cmd() -> None:
         )
 
 
+@app.command(name="sync-historical-prices")
+def sync_historical_prices_cmd(
+    label: Annotated[str, typer.Option("--label", help="Nome do lote (nomeia o batch file).")],
+    select: Annotated[
+        str | None, typer.Option("--select", help="'resolved' -- seleciona do universo resolvido.")
+    ] = None,
+    instrument_id: Annotated[
+        str | None, typer.Option("--instrument-id", help="Lista separada por virgula.")
+    ] = None,
+    batch_file: Annotated[
+        str | None, typer.Option("--batch-file", help="Arquivo commitado com um instrument_id por linha.")
+    ] = None,
+    as_of: Annotated[str | None, typer.Option("--as-of", help="Data de referencia da resolucao.")] = None,
+    limit: Annotated[int | None, typer.Option("--limit")] = None,
+    offset: Annotated[int, typer.Option("--offset")] = 0,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run/--execute", help="dry-run gera batch file + ledger, sem rede.")
+    ] = True,
+) -> None:
+    """Backfill historico de precos (Fase 3 M2.1) -- fluxo EXPLICITO.
+
+    So instrumento com resolution_status in {resolved, seeded}, ticker valido,
+    company_id e instrument_id. NUNCA usa sync-prices --all, NUNCA altera
+    instruments.active. Respeita a janela canonica (instrument_price_window):
+    linha do provedor fora dela nao entra em daily_prices.
+
+    Bloco 2 desta rodada: so --dry-run (gera o batch file commitavel e o
+    ledger do que seria pedido). --execute e o Bloco 3."""
+    from stock_research.pipelines.price_backfill import run_backfill
+
+    ids = [int(x) for x in instrument_id.split(",")] if instrument_id else None
+    try:
+        result = run_backfill(
+            label=label,
+            select=select,
+            instrument_ids=ids,
+            batch_file=batch_file,
+            as_of=as_of,
+            limit=limit,
+            offset=offset,
+            dry_run=dry_run,
+        )
+    except NotImplementedError as exc:
+        console.print(f"[yellow]{exc}[/]")
+        raise typer.Exit(code=2) from exc
+
+    console.print(
+        f"[green]dry-run[/] lote [bold]{result['label']}[/]: {result['candidates']} candidato(s), "
+        f"{result['seeded']} seeded"
+    )
+    console.print(f"  batch file: {result['batch_file']}")
+    console.print(f"  sha256: {result['batch_file_sha256']}")
+    console.print(f"  price_backfill_run_id: {result['backfill_run_id']}")
+    if result["without_price_window"]:
+        console.print(
+            f"  [yellow]sem instrument_price_window[/]: {result['without_price_window']}"
+        )
+
+
 @app.command(name="compute-liquidity")
 def compute_liquidity_cmd(
     from_date: Annotated[str | None, typer.Option("--from")] = None,

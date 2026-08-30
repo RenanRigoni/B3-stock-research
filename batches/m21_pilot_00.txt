@@ -1,0 +1,16 @@
+# Fase 3 M2.1 -- lote de backfill de precos: m21_pilot_00
+# as_of=2026-08-30  n=12  gerado por sync-historical-prices --dry-run
+# um instrument_id por linha; congelado no repo ANTES da primeira chamada de rede.
+# formato: <instrument_id>  # <ticker> <share_class> resolution=<...>
+2  # PETR4 PN resolution=resolved
+15  # ITUB3 ON resolution=resolved
+20  # VALE5 PNA resolution=seeded
+37  # ALOS3 ON resolution=resolved
+42  # ALSO3 ON resolution=resolved
+194  # CGRA4 ON resolution=resolved
+299  # ETRO3B ON resolution=resolved
+391  # KLBN11 UNT resolution=resolved
+417  # MAGG3 ON resolution=resolved
+483  # OGXP3 ON resolution=resolved
+600  # SMLS3 ON resolution=resolved
+617  # SSBR3 ON resolution=resolved
