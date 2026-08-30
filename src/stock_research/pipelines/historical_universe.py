@@ -507,6 +507,7 @@ def seed_manual_instruments() -> dict[str, Any]:
                     "trading_status": "delisted",
                     "source": "seed_manual",
                     "source_reference_year": spec["valid_to"].year,
+                    "source_reference_year_first": spec["valid_from"].year,
                     "source_available_from": None,
                     "source_observed_at": datetime.now(UTC),
                     "run_id": run_id,

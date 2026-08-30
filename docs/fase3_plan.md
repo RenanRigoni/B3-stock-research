@@ -18,19 +18,55 @@ Todo bug real contra dados reais vira teste de regressão.
 
 ## Decisões fixas do Handoff v2 (não rediscutir)
 
-### Infra / banco (Handoff §7.2, §9, §12.12)
+### Infra / banco — regra final (corrige Handoff §9)
 
-- Projeto B3 = `bdppudbcjosznkfucekm` "B3 FOCUS". **Dois conectores MCP nesta sessão:**
-  - `mcp__claude_ai_Supabase__*` (conta do Renan, exige `project_id`) → enxerga o projeto
-    **certo**. É o caminho sancionado para DDL / `apply_migration` / ledger.
-  - `mcp__supabase__*` (sem `project_id`) → app de saúde/CRM. **Nunca usar para B3.**
-- Leitura/escrita de dados: `stock_research.db` (REST/PostgREST + RPC `exec_sql`/`exec_ddl`).
-- DDL de migration: `mcp__claude_ai_Supabase__apply_migration` com `project_id` explícito
-  (mantém o ledger correto automaticamente) — ou `exec_ddl` + insert manual no ledger.
-- Ledger `supabase_migrations.schema_migrations` não aceita `exec_sql`/`exec_ddl` (403, sem
-  grant) — reconciliado no M0 via `mcp__claude_ai_Supabase__execute_sql`.
-- Migrations novas: **aditivas, compatíveis, reversíveis (`drop table`), testadas**
-  (`fase3.md` §1, Handoff §9).
+**Nome de conector não é identidade de banco. `project_id` é.**
+
+```
+DDL (create/alter/drop):  SOMENTE mcp__claude_ai_Supabase__apply_migration
+                          com project_id='bdppudbcjosznkfucekm' explícito.
+                          exec_ddl NÃO tem permissão de DDL. Não tentar.
+
+DML + leitura:            stock_research.db (REST + exec_sql/exec_ddl). Caminho normal.
+
+Ledger:                   supabase_migrations.schema_migrations não aceita o RPC (403).
+                          apply_migration mantém sozinho. execute_sql só para
+                          reconciliar drift histórico.
+
+ANTES DE QUALQUER DDL, obrigatório:
+  1. list_projects → confirmar que bdppudbcjosznkfucekm aparece
+  2. afirmar o project_id como string literal na chamada
+  3. NUNCA inferir o projeto pelo nome do conector ou da ferramenta
+```
+
+- **`exec_ddl` NÃO faz DDL** — achado do M2 (2026-08-30): `stock_research.db.execute()` com
+  `create table` retorna **`403 permission denied for schema public`**. O `service_role` faz
+  DML (o `delete from instrument_lifecycle` do pipeline funciona) mas **não tem `CREATE` em
+  `public`**. O Handoff §9 oferecia `exec_ddl` como alternativa para migration — **está
+  errado, corrigido aqui**.
+- **Conectores MCP nesta máquina** (dois, tokens de contas diferentes, o nome não distingue):
+  - `mcp__claude_ai_Supabase__*` — exige `project_id`. Validado: `list_projects` devolve
+    **um único** projeto, `bdppudbcjosznkfucekm` "B3 FOCUS", `sa-east-1`, PG 17. É o B3.
+  - `mcp__supabase__*` — sem `project_id`, aponta para outro app. **Nunca usar para B3.**
+- Migrations novas: **aditivas, compatíveis, reversíveis (`drop table`/`drop column`),
+  testadas** (`fase3.md` §1, Handoff §9).
+
+### `instruments.active` — escopo operacional, NÃO vigência histórica
+
+`active = true` é o gate de escopo dos pipelines, usado em 6 lugares:
+`prices.py` (`sync-prices --all`), `news.py` (`sync-news --all`), `fundamentals_ingest.py`,
+`audit.py`, e os `--all` de `compute-multiples` / `compute-quality`.
+
+**Não significa "negocia hoje"**: PETR3/ITUB3 estão `active=false` e são negociados agora —
+ficam fora por decisão de escopo, não por delisting.
+
+Consequências obrigatórias:
+
+- Instrumentos históricos entram `active=false`. Inerte por construção — nenhum pipeline os
+  puxa. **Nunca** ligar `active=true` para forçar ingestão.
+- **Vigência é respondida por `instrument_lifecycle`**, fonte única.
+- `instruments.valid_from` / `valid_to` (existem, NULL, nunca usados) **permanecem NULL** —
+  não duplicar o lifecycle.
 
 ### Regra bitemporal (obrigatória, `fase3.md` §3 + correção do Renan no Handoff)
 

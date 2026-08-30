@@ -18,6 +18,7 @@ vazio 2010-2017. Nesse caso ``ticker=None`` e ``quality_flag='incomplete'``;
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date
@@ -26,6 +27,18 @@ from typing import Any
 from stock_research.transforms.fundamentals_facts import parse_date
 
 SOURCE = "cvm_fca"
+
+# Formato real de codigo de negociacao da B3: 4 letras + 1-2 digitos, com
+# sufixo `B` opcional (Bovespa Mais / balcao organizado -- ETRO3B, QVQP3B,
+# OPSE3B sao codigos REAIS, nao lixo).
+#
+# Achado contra dado real (M1, 778 linhas com ticker): 109 (14%) NAO sao codigo
+# nenhum -- a FCA deixa `Codigo_Negociacao` como texto livre e as empresas
+# preenchem com "NAO", "NAO HA", "N/A", "000000", "0000", "5.4", "1545-8",
+# "713854", ou so o radical sem digito ("SEIVA", "BRQB", "JOPA"). O M1 gravou
+# verbatim -- correto, a linha bruta preserva a fonte. Quem NUNCA pode aceitar
+# esses valores como identificador e a camada de resolucao (M2).
+TICKER_PATTERN = re.compile(r"^[A-Z]{4}\d{1,2}B?$")
 
 
 def _norm(text: str | None) -> str:
@@ -86,6 +99,16 @@ def normalize_venue(sigla: str | None) -> str | None:
     return n[:32]
 
 
+def is_valid_ticker(ticker: str | None) -> bool:
+    """``True`` so para codigo de negociacao B3 bem-formado.
+
+    NUNCA usar para apagar o valor bruto -- ele fica gravado como veio da FCA.
+    Serve para a camada de resolucao decidir se o valor pode virar
+    identificador (``instruments``, ligacao de preco).
+    """
+    return bool(ticker) and bool(TICKER_PATTERN.match(ticker or ""))
+
+
 @dataclass(frozen=True)
 class InstrumentLifecycleCandidate:
     row: dict[str, Any] | None
@@ -132,6 +155,13 @@ def build_instrument_candidate(
     if ticker is None:
         quality_flag = "incomplete" if quality_flag == "ok" else quality_flag
         quality_bits.append("FCA nao informa Codigo_Negociacao antes de 2018")
+    elif not is_valid_ticker(ticker):
+        # Valor bruto PRESERVADO (a fonte nunca e reescrita); so a qualidade
+        # registra que ele nao e um codigo de negociacao utilizavel.
+        quality_flag = "inconsistent" if quality_flag == "ok" else quality_flag
+        quality_bits.append(
+            f"Codigo_Negociacao {ticker!r} fora do formato B3 -- nao e identificador"
+        )
 
     trading_status = "delisted" if trading_end is not None else "trading"
 
@@ -150,6 +180,7 @@ def build_instrument_candidate(
         "trading_status": trading_status,
         "source": SOURCE,
         "source_reference_year": reference_year,
+        "source_reference_year_first": reference_year,
         "source_available_from": source_available_from,
         "source_observed_at": source_observed_at,
         "run_id": run_id,
@@ -172,6 +203,10 @@ def merge_instrument_intervals(candidates: list[dict[str, Any]]) -> list[dict[st
       deriva depois, Handoff §5.2).
     - ``source_reference_year`` = o maior (FCA mais recente = conhecimento mais
       completo); ``source_available_from`` / ``source_observed_at`` idem.
+    - ``source_reference_year_first`` = o **menor** ano de FCA que reportou esta
+      identidade. E o que responde "o ticker era observavel em D?" na camada
+      investivel (M2) -- o maior nao serve: ALOS3 so aparece na FCA de 2023, e
+      um piso global 2018 o marcaria como observavel cedo demais.
     - ``quality_flag`` = o pior; ``ticker`` NULL num ano e preenchido noutro
       colapsam em identidades diferentes de proposito (o pipeline liga os dois
       pela classe se precisar).
@@ -187,6 +222,9 @@ def merge_instrument_intervals(candidates: list[dict[str, Any]]) -> list[dict[st
         cur["listing_start"] = _min_date(cur["listing_start"], cand["listing_start"])
         cur["valid_to"] = _min_date(cur["valid_to"], cand["valid_to"])
         cur["listing_end"] = _min_date(cur["listing_end"], cand["listing_end"])
+        cur["source_reference_year_first"] = min(
+            cur["source_reference_year_first"], cand["source_reference_year_first"]
+        )
         if cand["source_reference_year"] >= cur["source_reference_year"]:
             cur["source_reference_year"] = cand["source_reference_year"]
             cur["source_available_from"] = cand["source_available_from"]
@@ -214,6 +252,49 @@ _FLAG_RANK = {"ok": 0, "estimated": 1, "incomplete": 2, "inconsistent": 3, "miss
 
 def _worst_flag(a: str, b: str) -> str:
     return a if _FLAG_RANK.get(a, 0) >= _FLAG_RANK.get(b, 0) else b
+
+
+RESOLVED = "resolved"
+BACK_PROJECTED = "back_projected"
+UNRESOLVED_NO_CODE = "unresolved_no_code"
+UNRESOLVED_INVALID_CODE = "unresolved_invalid_code"
+SEEDED = "seeded"
+
+# Status que permitem usar o instrumento como identidade (entrar em
+# ``instruments``, ligar serie de preco).
+IDENTIFIABLE = frozenset({RESOLVED, SEEDED})
+
+
+def resolution_status(row: dict[str, Any], as_of: date) -> str:
+    """Identificabilidade do instrumento **em D** (Opus, "structural vs investable").
+
+    NAO e propriedade estatica da linha -- e funcao de ``(linha, D)``. A mesma
+    linha de ALOS3 (``valid_from`` 2011, primeiro FCA 2023) e ``resolved`` em
+    2024 e ``back_projected`` em 2013. Por isso mora aqui e nao numa coluna.
+
+    Vocabulario fechado:
+
+    ``resolved``                 ticker bem-formado E observado numa FCA cujo ano
+                                 de referencia ja passou em D.
+    ``back_projected``           ticker bem-formado, mas a primeira FCA que o
+                                 reportou e POSTERIOR a D -- usar seria retroagir
+                                 um ticker futuro. Proibido.
+    ``unresolved_no_code``       FCA nao informa codigo (2010-2017).
+    ``unresolved_invalid_code``  campo preenchido com texto livre / lixo.
+    ``seeded``                   curadoria manual (``source='seed_manual'``),
+                                 sempre ``estimated``.
+    """
+    if row.get("source") == "seed_manual":
+        return SEEDED
+    ticker = row.get("ticker")
+    if ticker is None:
+        return UNRESOLVED_NO_CODE
+    if not is_valid_ticker(ticker):
+        return UNRESOLVED_INVALID_CODE
+    first = row.get("source_reference_year_first")
+    if first is None or first > as_of.year:
+        return BACK_PROJECTED
+    return RESOLVED
 
 
 def instrument_eligible_at(row: dict[str, Any], as_of: date) -> bool:
