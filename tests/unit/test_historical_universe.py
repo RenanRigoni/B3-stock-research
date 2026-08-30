@@ -223,6 +223,28 @@ def test_13_vale_class_structure_2012_differs_from_2020():
     assert "VALE5" not in {i.ticker for i in in_2020.instruments}
 
 
+def test_successive_tickers_same_class_collapse_to_most_recent_knowledge():
+    """SSBR3 -> ALSO3 -> ALOS3 (mesma ON). A FCA anual da a todos o mesmo
+    Data_Inicio_Negociacao (data de listagem da classe). O universo em D nao
+    pode devolver dois tickers para a mesma acao -- mantem o de
+    source_reference_year mais alto."""
+    companies = [_company(9, "ALLOS", "2011-01-01")]
+    rows = [
+        _instrument(9, "ALLOS", ticker="SSBR3", valid_from="2011-02-02",
+                    valid_to="2018-12-31", listing_end="2018-12-31"),
+        _instrument(9, "ALLOS", ticker="ALSO3", valid_from="2011-02-02",
+                    valid_to="2022-12-31", listing_end="2022-12-31"),
+        _instrument(9, "ALLOS", ticker="ALOS3", valid_from="2011-02-02"),
+    ]
+    for r, y in zip(rows, (2018, 2022, 2026), strict=True):
+        r["source_reference_year"] = y
+
+    u2024 = select_investable_universe(companies, rows, date(2024, 1, 1))
+    assert [i.ticker for i in u2024.instruments] == ["ALOS3"]
+    u2020 = select_investable_universe(companies, rows, date(2020, 1, 1))
+    assert [i.ticker for i in u2020.instruments] == ["ALSO3"]
+
+
 def test_16_idempotent_selection_pure_function():
     companies, instruments = _fixture_a_b()
     a = select_investable_universe(companies, instruments, date(2014, 1, 1))

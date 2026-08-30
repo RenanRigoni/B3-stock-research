@@ -86,18 +86,34 @@ def select_investable_universe(
             continue
         eligible_company[cid] = row["cnpj"]
 
-    instruments: list[UniverseInstrument] = []
+    # 1+ linha elegivel por (company_id, share_class): mantem so uma. V1: a FCA
+    # so tem codigo de negociacao a partir de 2018, entao SSBR3/ALSO3/ALOS3
+    # (mesma ON, tickers sucessivos) chegam com o mesmo Data_Inicio_Negociacao
+    # (data de listagem da CLASSE, nao do ticker) -- sem esse colapso, D=2020
+    # devolveria dois tickers para a mesma acao. Regra: o intervalo mais
+    # "apertado" em torno de D (menor valid_to >= D) e o ticker mais provavel
+    # naquela data; so cai para valid_to NULL quando nenhum e limitado; empate
+    # -> conhecimento mais recente. Ver docs/historical_universe.md §3.3.
+    best: dict[tuple[int, str], dict[str, Any]] = {}
     not_eligible_data: list[UniverseInstrument] = []
     for row in instrument_rows:
         cid = row["company_id"]
         if cid not in eligible_company:
             continue
-        cnpj = eligible_company[cid]
         if row.get("valid_from") is None or row.get("listing_start") is None:
-            not_eligible_data.append(_entry(row, cid, cnpj))
+            not_eligible_data.append(_entry(row, cid, eligible_company[cid]))
             continue
-        if instrument_eligible_at(row, as_of):
-            instruments.append(_entry(row, cid, cnpj))
+        if not instrument_eligible_at(row, as_of):
+            continue
+        key = (cid, row["share_class"])
+        cur = best.get(key)
+        if cur is None or _prefer(row, cur, as_of):
+            best[key] = row
+
+    instruments = [
+        _entry(r, r["company_id"], eligible_company[r["company_id"]]) for r in best.values()
+    ]
+    instruments.sort(key=lambda i: (i.company_id, i.share_class))
 
     return UniverseResult(
         as_of=as_of,
@@ -105,6 +121,32 @@ def select_investable_universe(
         instruments=tuple(instruments),
         not_eligible_data=tuple(not_eligible_data),
     )
+
+
+def _prefer(candidate: dict[str, Any], incumbent: dict[str, Any], as_of: date) -> bool:
+    """True se `candidate` substitui `incumbent` para a mesma
+    (company_id, share_class). Chave: intervalo mais apertado em torno de `as_of`
+    (menor `valid_to >= as_of`); limitado ganha de NULL; empate -> maior
+    `source_reference_year`; ultimo desempate -> ordem do ticker (determinismo).
+    """
+    ck = _tightness(candidate, as_of)
+    ik = _tightness(incumbent, as_of)
+    if ck != ik:
+        return ck < ik
+    cy = candidate.get("source_reference_year") or 0
+    iy = incumbent.get("source_reference_year") or 0
+    if cy != iy:
+        return cy > iy
+    return (candidate.get("ticker") or "") > (incumbent.get("ticker") or "")
+
+
+def _tightness(row: dict[str, Any], as_of: date) -> tuple[int, int]:
+    """Ordena por "quao especifico o fim e": (0, dias ate valid_to) para
+    intervalo limitado; (1, 0) para valid_to NULL (menos especifico)."""
+    vt = row.get("valid_to")
+    if vt is None:
+        return (1, 0)
+    return (0, (vt - as_of).days)
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +163,8 @@ _COMPANY_QUERY = """
 _INSTRUMENT_QUERY = """
     select l.company_id, c.cnpj, l.instrument_id, l.ticker, l.share_class,
            l.valid_from, l.valid_to, l.listing_start, l.listing_end,
-           l.market, l.listing_venue, l.segment, l.quality_flag, l.source
+           l.market, l.listing_venue, l.segment, l.quality_flag, l.source,
+           l.source_reference_year
     from public.instrument_lifecycle l
     join public.companies c on c.company_id = l.company_id
 """
