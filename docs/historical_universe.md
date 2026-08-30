@@ -495,3 +495,102 @@ nunca número inventado (`fase3.md` §15).
    resolvido pelo ano de referência mais recente, registrado em `quality_findings`.
 6. **Gotcha do backend REST**: uma coluna aliasada `t` colide com o alias `t` do
    `jsonb_agg(t)` dentro do RPC `exec_sql` e a linha inteira volta como escalar. Evitar `as t`.
+
+---
+
+## 10. M2.1A — expansão de cobertura de preços (parcial, PARADO no portão COTAHIST)
+
+Execução iniciada 2026-08-30. **Blocos 1–3 concluídos; Blocos 4–7 bloqueados**
+pela escalada abaixo. Ver "HANDOFF PARA SONNET — M2.1 (revisão 2)".
+
+### 10.1 Janela canônica de preço (Bloco 1)
+
+`instrument_price_window` (migração `20260830151258`) — **derivada e recomputável**,
+nunca fonte de verdade. Regra:
+
+```
+price_valid_from = max(company start, class listing_start,
+                       01/01/source_reference_year_first)
+```
+
+salvo **exceção de continuidade independente** (`config/price_continuity_exceptions.yaml`).
+Ser variante única no FCA **não** prova o símbolo antes do primeiro ano observado — o
+Yahoo retroprojeta série de predecessor sob o símbolo atual. Linha do provedor anterior
+a `price_valid_from` **não entra** em `daily_prices` canônico: fica no bruto/ledger,
+contada como `ticker_identity_not_proven`.
+
+**Caso B** (SSBR3→ALSO3→ALOS3): cada variante truncada em
+`date(year_first_do_sucessor − 1, 12, 31)`. ALOS3 (`year_first` 2023) nunca recebe linha
+anterior a 2023-01-01. Variantes de **mesmo ano** (BRKM5/BRKM6) são paralelas — nenhuma
+trunca a outra.
+
+Resultado (694 instrumentos): `from_precision` **year 594 / day 100 / unknown 0**;
+`to_precision` **open 432 / day 258 / year 4**; 67 variantes com sucessor; 53 paralelas
+de mesmo ano; **5 exceções de continuidade** (PETR3/PETR4/VALE3/ITUB3/ITUB4 —
+`proof: phase1_seed`). **Histórico descartado por `ticker_identity_not_proven` = 0**:
+as exceções cobrem exatamente as 5 séries pré-2018 reais e corretamente atribuídas.
+
+### 10.2 Ledger e batch file (Bloco 2)
+
+`price_backfill_runs` + `price_backfill_attempts` (migração `20260830151747`). Uma linha
+por `(run, instrumento)` — checkpoint/resume; nenhum instrumento some entre etapas.
+`rows_written` = só o que caiu **dentro** da janela; `rows_out_of_window` fica no
+bruto/ledger, nunca em `daily_prices`.
+
+`sync-historical-prices` — fluxo **explícito**: só `resolution_status ∈ {resolved,
+seeded}` + ticker válido + `company_id` + `instrument_id`. Nunca `sync-prices --all`,
+nunca `instruments.active`. `PILOTO 0` congelado em `batches/m21_pilot_00.txt`
+(sha256 `0077239418d2…`) **antes de qualquer rede** — 10 casos / 12 instrumentos.
+
+### 10.3 PILOTO 0 — execução real (Bloco 3, run 3, após 2 correções)
+
+Provedor: yfinance (V1, inalterado). 0.5 req/s. **0 CRITICAL.**
+
+| ticker | caso | status | linhas | flag |
+|---|---|---|---|---|
+| PETR4 | controle / continuidade | resolved | 4139 | ok |
+| ITUB3 | empresa re-registrada / continuidade | resolved | 4139 | ok |
+| VALE5 | seeded PNA classe extinta | empty_series | 0 | incomplete |
+| ALOS3 | cadeia de nome (sucessor) | resolved | 914 | estimated |
+| ALSO3 | cadeia de nome (predecessor) | symbol_not_found | 0 | provider_no_data_delisted |
+| SSBR3 | cadeia de nome (predecessor) | symbol_not_found | 0 | provider_no_data_delisted |
+| CGRA4 | conflito de `share_class` ON/PN | resolved | 742 | estimated |
+| KLBN11 | classe UNT | resolved | 2153 | estimated |
+| MAGG3 | companhia cancelada 2019 (incorporação) | symbol_not_found | 0 | provider_no_data_delisted |
+| ETRO3B | Bovespa Mais sufixo `B`, deslistada | symbol_not_found | 0 | provider_no_data_delisted |
+| OGXP3 | falência/recuperação, deslistada | empty_series | 0 | incomplete |
+| SMLS3 | janela degenerada | skipped_out_of_scope | 0 | ok |
+
+Linhas gravadas: **12 087**; fora da janela: **0**. `daily_prices` 24 822 → **28 635**
+(6 → 9 instrumentos; +3809 dos 3 novos + 4 linhas de cauda de PETR4/ITUB3 além do
+último sync da Fase 1). **Idempotência**: 2ª execução → `daily_prices` inalterado,
+`price_backfill_attempts` idênticos.
+
+**Discriminador `symbol_not_found` × `empty_series` (MEDIDO, não presumido):** sonda
+`yfinance` de 1 mês + `get_history_metadata()` após retorno vazio. `symbol_not_found` =
+sonda e metadata vazias (ALSO3, ETRO3B, MAGG3, SSBR3 — deslistadas sem rastro no Yahoo).
+`empty_series` = símbolo resolve hoje mas nada na janela pedida (VALE5; **OGXP3 — o
+símbolo `OGXP3.SA` hoje devolve dados fora da janela de 2018, forte indício de
+reutilização de código**).
+
+**2 bugs reais corrigidos (piloto, dado de produção), com regressão:**
+1. `duplicate_series` dava CRITICAL contra a **própria** série já em `daily_prices`
+   (fingerprint semeado com o próprio ticker) → guarda `owner != ticker`.
+2. `calendar_drift` dava WARN para datas **após o fim** do `trading_calendar` (2 dias de
+   defasagem) → só datas interiores (`<= calendar_max`) contam.
+
+### 10.4 PORTÃO COTAHIST — DISPARADO → ESCALADO
+
+Deslistadas no piloto (6: VALE5, ALSO3, SSBR3, MAGG3, ETRO3B, OGXP3): **0 resolvidas
+com dado**, 4 `symbol_not_found`, 2 `empty_series`.
+
+- `coverage_delisted / coverage_active` = **0 / 1,0 < 0,60** → dispara.
+- `symbol_not_found` entre deslistadas = **4/6 ≈ 67% > 40%** → dispara.
+- OGXP3 = **possível reutilização de símbolo** → gatilho independente de escalada
+  imediata.
+
+O conjunto de deslistadas do piloto foi **escolhido a dedo** (casos difíceis:
+OGX/falência, Magnesita/incorporação, Smiles, Somos) — não é amostra aleatória. A
+medição representativa exigiria o lote de 20 estratificado (Bloco 4). Mas as condições
+de parada do handoff estão atingidas **e** há indício de reutilização de símbolo →
+**PARADO antes do Bloco 4**. `ESCALAR PARA OPUS — ANTECIPAR SPIKE COTAHIST`.

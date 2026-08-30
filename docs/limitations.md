@@ -142,6 +142,21 @@ que os dados **não** conseguem sustentar é parte do produto, não uma ressalva
 - **`liquidity_metrics` usa `close` bruto por decisão explícita.** Volume financeiro com
   `adj_close` injetaria proventos e splits futuros numa métrica histórica — look-ahead
   silencioso. Há teste que varre o AST e falha se `adj_close` aparecer no código.
+- **Janela canônica de preço (Fase 3 M2.1).** `daily_prices` **nunca** recebe linha
+  anterior à identidade comprovada do ticker: `price_valid_from = max(company start,
+  class listing_start, 01/01/source_reference_year_first)`, salvo as **5 exceções de
+  continuidade** curadas (`config/price_continuity_exceptions.yaml` —
+  PETR3/PETR4/VALE3/ITUB3/ITUB4, negociados sob o mesmo código desde antes de 2010).
+  Consequência aceita: warm-up de preço pré-2018 do universo expandido fica **incompleto**
+  até uma fonte independente (COTAHIST/ISIN) — preferível faltar histórico a atribuí-lo
+  ao ticker errado. `from_precision='year'` marca a precisão anual de
+  `source_reference_year_first` — nunca convertida em dia inventado.
+- **Cobertura de deslistadas no yfinance é ruim (Fase 3 M2.1, PILOTO 0).** Das 6 ações
+  deslistadas do piloto, **0** retornaram série: 4 `symbol_not_found` (sem rastro no
+  Yahoo), 2 `empty_series` — uma delas (`OGXP3.SA`) devolve dados **fora** da janela
+  histórica, indício de reutilização de código. A expansão do backfill foi **parada** no
+  portão COTAHIST e escalada. Nenhuma série foi inventada; ausência vira
+  `quality_flag='provider_no_data_delisted'`.
 
 ## Infraestrutura
 

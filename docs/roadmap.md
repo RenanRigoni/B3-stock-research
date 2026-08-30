@@ -508,6 +508,34 @@ fechar com `pytest` + `ruff check .` + `mypy src` verdes (`fase3.md` §89).
 
 **Não fazer merge em `main` sem autorização explícita** (`fase3.md` §91).
 
+### M2.1A — expansão de cobertura de preços (**PARADO no portão COTAHIST**, 2026-08-30)
+
+Rodada exclusivamente de execução do HANDOFF M2.1 rev.2. **Blocos 1–3 feitos; 4–7 bloqueados.**
+
+- **Bloco 1 — janela canônica de preço.** `instrument_price_window` (migração
+  `20260830151258`), pura + derivada. `price_valid_from = max(company start, class
+  listing_start, 01/01/source_reference_year_first)`, salvo 5 exceções de continuidade
+  curadas (`config/price_continuity_exceptions.yaml`). 694 instrumentos:
+  `from_precision` year 594 / day 100. Histórico descartado por
+  `ticker_identity_not_proven` = **0**.
+- **Bloco 2 — ledger.** `price_backfill_runs` + `price_backfill_attempts` (migração
+  `20260830151747`). `sync-historical-prices` (só `resolved`/`seeded`, nunca
+  `instruments.active`, nunca `sync-prices --all`). `PILOTO 0` congelado em
+  `batches/m21_pilot_00.txt` (sha256 `0077239418d2…`) antes de qualquer rede.
+- **Bloco 3 — PILOTO 0 (yfinance real).** 10 casos / 12 instrumentos. **0 CRITICAL.**
+  5 resolved (PETR4/ITUB3/ALOS3/CGRA4/KLBN11, 12 087 linhas), 2 empty_series
+  (VALE5/OGXP3), 4 symbol_not_found (ALSO3/SSBR3/MAGG3/ETRO3B), 1 skip (SMLS3, janela
+  degenerada). `daily_prices` 24 822 → 28 635. Idempotência confirmada. Discriminador
+  `symbol_not_found` × `empty_series` medido (sonda yfinance). 2 bugs reais corrigidos
+  com regressão (`duplicate_series` self-match; `calendar_drift` na cauda do calendário).
+- **PORTÃO COTAHIST DISPARADO**: 0/6 deslistadas do piloto retornaram série;
+  `symbol_not_found` 4/6 (67% > 40%); OGXP3 = possível reutilização de símbolo.
+  **ESCALADO — `ESCALAR PARA OPUS — ANTECIPAR SPIKE COTAHIST`.**
+- 33 testes novos. `pytest` 581 / `ruff` / `mypy` limpos.
+- **Bloco 4 (lote 20), Bloco 5 (lote 100), Bloco 6 (restante), Bloco 7 (relatório),
+  M2.1B (freeze) e M3 NÃO iniciados. Sem merge em `main`.**
+  Detalhe: [`docs/historical_universe.md`](historical_universe.md) §10.
+
 ### M2 — universo investível (**concluído com escalada pendente**, 2026-08-30)
 
 - Camada investível sobre a estrutural:
