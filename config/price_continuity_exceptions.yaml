@@ -1,0 +1,61 @@
+# Excecao explicita a regra canonica de price_valid_from (Fase 3 M2.1,
+# HANDOFF revisao 2, correcao normativa 1).
+#
+# REGRA PADRAO: price_valid_from = max(company start, class listing_start,
+# 01/01/source_reference_year_first). Linhas do provedor anteriores a esse
+# limite NAO entram em daily_prices canonico -- ficam so no bruto/ledger,
+# contadas como `ticker_identity_not_proven`.
+#
+# Esta lista libera preco anterior ao limite APENAS onde existe prova
+# independente de continuidade historica do ticker. Cada entrada tem
+# justificativa escrita. A lista NAO cresce sem autorizacao explicita do Opus
+# -- ha teste que falha se um ticker novo aparecer aqui sem estar nesta nota.
+#
+# proof = phase1_seed: o ticker foi curado manualmente no universo da Fase 1
+# (config/companies.yaml), negociado continuamente sob o MESMO codigo desde
+# antes de 2010, sem renomeacao -- a serie yfinance ja ingerida na Fase 1
+# pertence comprovadamente a este ticker. A FCA so publica Codigo_Negociacao
+# desde 2018, entao o limite canonico seria 2018-01-01 e descartaria ~8 anos
+# de historico real e corretamente atribuido.
+
+version: price_continuity_exceptions_v1
+
+exceptions:
+  - ticker: PETR3
+    instrument_id: 14
+    continuity_from: "2010-01-04"
+    proof: phase1_seed
+    justification: >-
+      Petrobras ON sob PETR3 continuamente desde 1968 (listing_start FCA
+      1968-08-27); nenhuma renomeacao. Serie yfinance da Fase 1 (desde
+      2010-01-04) e desta ON.
+  - ticker: PETR4
+    instrument_id: 2
+    continuity_from: "2010-01-04"
+    proof: phase1_seed
+    justification: >-
+      Petrobras PN sob PETR4 continuamente desde 1968; nenhuma renomeacao.
+      Idem PETR3.
+  - ticker: VALE3
+    instrument_id: 3
+    continuity_from: "2010-01-04"
+    proof: phase1_seed
+    justification: >-
+      Vale ON sob VALE3 desde 1968 (listing_start FCA 1968-04-01). VALE3 ON ja
+      negociava antes da unificacao de classes de 2017-12-22 (conversao da
+      VALE5 PNA). A serie yfinance pre-2017 e VALE3 ON, nao VALE5.
+  - ticker: ITUB3
+    instrument_id: 15
+    continuity_from: "2010-01-04"
+    proof: phase1_seed
+    justification: >-
+      Itau Unibanco ON sob ITUB3 desde 2002-12-30 (reorganizacao societaria
+      Itau-Unibanco); nenhuma renomeacao posterior. Serie yfinance da Fase 1 e
+      desta ON.
+  - ticker: ITUB4
+    instrument_id: 4
+    continuity_from: "2010-01-04"
+    proof: phase1_seed
+    justification: >-
+      Itau Unibanco PN sob ITUB4 desde 2002-12-30; nenhuma renomeacao. Idem
+      ITUB3.

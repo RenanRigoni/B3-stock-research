@@ -157,6 +157,15 @@ def load_universe_config() -> dict[str, Any]:
     return _read_yaml("backtest_universe_v1.yaml")
 
 
+@lru_cache(maxsize=1)
+def load_price_continuity_exceptions() -> dict[str, Any]:
+    """``config/price_continuity_exceptions.yaml`` -- excecao explicita a regra
+    canonica de ``price_valid_from`` (Fase 3 M2.1). Cada entrada precisa de
+    prova independente e justificativa escrita; a lista nao cresce sem
+    autorizacao (ha teste de guarda)."""
+    return _read_yaml("price_continuity_exceptions.yaml")
+
+
 def thresholds_from_config(cfg: dict[str, Any] | None = None) -> Any:
     """Limiares de investibilidade a partir da config versionada.
 

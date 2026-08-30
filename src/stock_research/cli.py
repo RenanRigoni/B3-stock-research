@@ -393,6 +393,41 @@ def universe_coverage_cmd(
         )
 
 
+@app.command(name="compute-price-windows")
+def compute_price_windows_cmd() -> None:
+    """Janela canonica de preco por instrumento (Fase 3 M2.1 Bloco 1).
+
+    price_valid_from = max(company start, class listing_start,
+    01/01/source_reference_year_first), salvo excecao de continuidade
+    independente (config/price_continuity_exceptions.yaml). NAO baixa preco --
+    so calcula limites a partir do lifecycle. O backfill descarta linha do
+    provedor fora desta janela (ticker_identity_not_proven)."""
+    from stock_research.pipelines.price_window import compute_price_windows
+
+    result = compute_price_windows()
+    console.print(
+        f"[green]instrument_price_window[/]: {result['written']} linha(s) em "
+        f"{result['instruments']} instrumento(s)"
+    )
+    console.print(f"  from_precision: {result['from_precision']}")
+    console.print(f"  to_precision:   {result['to_precision']}")
+    console.print(
+        f"  caso B (variantes com sucessor): {result['case_b_variants']}  |  "
+        f"paralelas mesmo ano: {result['parallel_same_year_variants']}  |  "
+        f"excecoes de continuidade: {result['continuity_exceptions']}"
+    )
+    disc = result["history_discarded_ticker_identity_not_proven"]
+    console.print(
+        f"  historico descartado (linhas < price_valid_from em instrumentos com serie): "
+        f"{disc['total_rows_before_window']}"
+    )
+    for d in disc["by_instrument"]:
+        console.print(
+            f"    {d['ticker']}: {d['rows_before']} linha(s) antes de {d['price_valid_from']} "
+            f"(serie comeca {d['series_first']})"
+        )
+
+
 @app.command(name="compute-liquidity")
 def compute_liquidity_cmd(
     from_date: Annotated[str | None, typer.Option("--from")] = None,
