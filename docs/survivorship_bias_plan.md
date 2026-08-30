@@ -97,3 +97,23 @@ Enquanto o universo continuar restrito a PETR4/VALE3/ITUB4 (todas sobreviventes)
   neste universo.
 - Qualquer resultado de backtest da Fase 3 sobre o universo atual deve vir acompanhado de um
   aviso explícito de survivorship bias, não de uma nota de rodapé.
+
+---
+
+## 7. Status na Fase 3 (2026-08-30) — execução iniciada
+
+O desenho conceitual acima passou a ser implementado no **M1 da Fase 3**. Referência
+autoritativa das decisões: [`docs/fase3_handoff_v2.md`](fase3_handoff_v2.md) (Handoff v2,
+Opus). Registro de execução: [`docs/fase3_plan.md`](fase3_plan.md). Detalhe do universo
+histórico: [`docs/historical_universe.md`](historical_universe.md).
+
+Mudança relevante vs. o plano original deste documento: o universo point-in-time V1 **não**
+depende de composição histórica de índice (item §5 acima) — usa **existência efetiva de
+registro/negociação + filtros de liquidez/dados** (Handoff §11). Composição de índice fica
+para o filtro de investibilidade do M2, se necessário.
+
+Regra bitemporal (Handoff §1-§3): elegibilidade histórica é decidida por **tempo efetivo**
+(`valid_from`/`valid_to`/`listing_start`/`listing_end`), nunca por tempo de transação
+(`source_available_from`/`source_observed_at`/`ingested_at`). A exceção é **enumerada** às
+tabelas `company_lifecycle` e `instrument_lifecycle` — todo o resto (fundamentos, valuation,
+quality, ERP/risk-free, notícias, eventos) mantém `available_from <= as_of` estrito.

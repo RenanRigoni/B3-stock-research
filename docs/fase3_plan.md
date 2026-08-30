@@ -1,10 +1,12 @@
 # Plano de execução — Fase 3 (universo histórico + backtesting)
 
-Spec mestre: [`fase3.md`](../fase3.md). Este documento é o registro de execução, milestone a
-milestone. Decisões metodológicas/arquiteturais vêm do **Handoff v2 (Opus)** — aprovadas,
-não se rediscutem aqui. Onde uma questão nova toca metodologia / survivorship / point-in-time
-/ lifecycle / arquitetura da Fase 2, a regra é **PARAR e escalar para o Opus**, nunca decidir
-sozinho.
+Spec mestre: [`fase3.md`](../fase3.md). Decisões metodológicas/arquiteturais: **Handoff v2
+(Opus)** — [`docs/fase3_handoff_v2.md`](fase3_handoff_v2.md), 16 seções, aprovado. Não se
+rediscutem aqui. Detalhe do universo histórico e da regra bitemporal:
+[`docs/historical_universe.md`](historical_universe.md). Este documento é o registro de
+execução, milestone a milestone. Onde uma questão nova toca metodologia / survivorship /
+point-in-time / lifecycle / arquitetura da Fase 2 e **não está coberta pelo Handoff v2 §12**,
+a regra é **PARAR e escalar para o Opus** (gatilhos no Handoff §16), nunca decidir sozinho.
 
 Branch de trabalho: `fase3-backtesting-engine` (a partir de `main` `f80c666`). **Sem merge em
 `main` sem autorização explícita** (`fase3.md` §91).
@@ -16,16 +18,19 @@ Todo bug real contra dados reais vira teste de regressão.
 
 ## Decisões fixas do Handoff v2 (não rediscutir)
 
-### Infra / banco
+### Infra / banco (Handoff §7.2, §9, §12.12)
 
-- Toda operação no banco B3 usa **exclusivamente** o caminho `stock_research.db` (REST /
-  PostgREST + RPC `exec_ddl` para DDL). Projeto correto: `bdppudbcjosznkfucekm` "B3 FOCUS"
-  (`doctor` confirma).
-- Exceção única, pontual: o ledger `supabase_migrations.schema_migrations` não aceita
-  `exec_sql`/`exec_ddl` (sem grant no schema) — reconciliado uma vez no M0 via MCP
-  `execute_sql`, apontando explicitamente para `bdppudbcjosznkfucekm`.
-- Migrations novas: **aditivas, compatíveis, reversíveis quando possível, testadas**
-  (`fase3.md` §1).
+- Projeto B3 = `bdppudbcjosznkfucekm` "B3 FOCUS". **Dois conectores MCP nesta sessão:**
+  - `mcp__claude_ai_Supabase__*` (conta do Renan, exige `project_id`) → enxerga o projeto
+    **certo**. É o caminho sancionado para DDL / `apply_migration` / ledger.
+  - `mcp__supabase__*` (sem `project_id`) → app de saúde/CRM. **Nunca usar para B3.**
+- Leitura/escrita de dados: `stock_research.db` (REST/PostgREST + RPC `exec_sql`/`exec_ddl`).
+- DDL de migration: `mcp__claude_ai_Supabase__apply_migration` com `project_id` explícito
+  (mantém o ledger correto automaticamente) — ou `exec_ddl` + insert manual no ledger.
+- Ledger `supabase_migrations.schema_migrations` não aceita `exec_sql`/`exec_ddl` (403, sem
+  grant) — reconciliado no M0 via `mcp__claude_ai_Supabase__execute_sql`.
+- Migrations novas: **aditivas, compatíveis, reversíveis (`drop table`), testadas**
+  (`fase3.md` §1, Handoff §9).
 
 ### Regra bitemporal (obrigatória, `fase3.md` §3 + correção do Renan no Handoff)
 
@@ -120,34 +125,45 @@ sinal, ML. Nenhuma metodologia da Fase 2 muda.
 
 ## M1 — universo histórico / survivorship bias (em andamento)
 
-Fontes (do Handoff, a validar contra arquivo real antes de qualquer parser):
+Ordem: Handoff v2 §14, passos 6–17. Schemas reais validados e mapeamento completo em
+[`docs/historical_universe.md`](historical_universe.md) §3.
 
-- **Company lifecycle**: CVM cadastro `cad_cia_aberta.csv` — já em disco
-  (`data/raw/cvm/registry/`). Traz `DT_REG`, `DT_CANCEL`, `MOTIVO_CANCEL`, `SIT`,
-  `SIT_EMISSOR`, `CATEG_REG`, `TP_MERC`. É **snapshot** (sem histórico de nome/situação, sem
-  ticker/ISIN/classe). Parser atual valida só `{CNPJ_CIA, DENOM_SOCIAL, CD_CVM, SIT}` e
-  descarta canceladas — estender para reter canceladas/incorporadas.
-- **Instrument / ticker lifecycle**: CVM FCA
-  `fca_cia_aberta_valor_mobiliario_YYYY.csv` (dataset `cia_aberta-doc-fca`, ZIPs anuais
-  2010-2026). **Não ingerido hoje.** Traz código de negociação / classe / mercado / datas de
-  negociação por ano. **Schema exato A VALIDAR baixando 1 ZIP real antes de escrever o
-  parser** — não assumir nomes de coluna.
-- Cobertura: piso real 2010 (preço + CVM + FCA). Notícias/eventos só 2017+.
-- Preço da cauda de deslistadas: yfinance para após o delisting — buraco conhecido, aceitar
-  cobertura parcial + `quality_flag`.
+### Validação de schema (passo 6) — feita 2026-08-30
 
-Entregas M1: 2 tabelas novas aditivas (`company_lifecycle`, `instrument_lifecycle`),
-ingestão do cadastro estendido + FCA, `ticker_aliases` populada com trocas reais detectadas,
-caso VALE validado, testes anti-survivorship + invariância à proveniência + look-ahead de
-lifecycle não vaza para sinais/valuation.
+- `cad_cia_aberta.csv` (disco): 46 colunas, cp1252, `;`. 2677 linhas —
+  ATIVO 757 / CANCELADA 1912 / SUSPENSO 8. 1912/1912 canceladas com `DT_CANCEL` +
+  `MOTIVO_CANCEL`. Snapshot (sem histórico de transições; sem ticker/ISIN/classe).
+- `fca_cia_aberta_valor_mobiliario_YYYY.csv` (ZIPs 2010/2015/2016/2017/2018/2019/2020/2023
+  baixados): 18 colunas, cp1252, `;`, **header byte-idêntico 2010→2023**. Colunas confirmadas
+  e mapeadas em `historical_universe.md` §3.2.
+- **Limitação real descoberta**: `Codigo_Negociacao` (ticker) **vazio 2010–2017**, ~60%
+  preenchido 2018+. Datas de negociação/listagem completas o tempo todo. **Não é gatilho de
+  escalada** (Handoff §16 pede escalar só se as *datas* forem inutilizáveis) — tratado dentro
+  do envelope Handoff §4.2/§8.5/§11: `ticker` nullable, `share_class` discrimina, gaps com
+  `quality_flag='incomplete'`, universo de teste semeado. Detalhe em `historical_universe.md`
+  §3.3.
+- **VALE**: FCA não tem linha histórica de VALE5/PNA; a estrutura de classes é provável via
+  `share_count_history` (PN 2,1 bi em 2010–2016 → 12 em 2017). VALE5 entra semeada em
+  `instrument_lifecycle` (`source='seed_manual'`, `estimated`). Detalhe §3.4.
 
-### Abertas para o Opus (não decidir sozinho)
+### Entregas M1 (passos 7–17)
 
-- Deslistadas: todas em `instruments` (`active=false`) ou só as com preço?
-- Liquidez: em `fundamental_metrics` (proibido misturar) vs. tabela nova — Handoff aponta
-  tabela própria; confirmar nome.
-- "Investível" exigir presença em índice — **fora da V1** por decisão do Handoff; carteira
-  histórica da B3 não validada.
-- Preço de saída em delisting sem cotação — política financeira pertence ao milestone do
-  backtest, não ao M1.
-- Split temporal (`fase3.md` §46) — após medir cobertura real.
+2 tabelas novas aditivas (`company_lifecycle`, `instrument_lifecycle` — schema no Handoff §4);
+`sources/fundamentals/cvm_fca.py` + extensão da leitura do cadastro; `pipelines/historical_universe.py`;
+CLI `sync-cvm-lifecycle`; `analytics/universe.py` (`select_investable_universe` puro +
+`get_investable_universe_as_of(D)`, predicado do Handoff §6, sem expor `valid_to`/`listing_end`);
+`config/backtest_universe_v1.yaml`; `ticker_aliases` semeada; caso VALE validado; os 18 testes
+do Handoff §15.
+
+### Decisões abertas (Handoff §13) — resolução V1 adotada, reversível
+
+- **Deslistadas em `instruments`**: só as do universo de teste + as que ganharem preço.
+  `instrument_lifecycle` é a representação estrutural completa (não exige linha em
+  `instruments`). Confirma Handoff §13.1 no lado conservador.
+- **Fallback de `listing_start` NULL**: `company.valid_from` → primeira cotação →
+  `NOT_ELIGIBLE_DATA` contabilizado (Handoff §5.1).
+- **Liquidez**: adiada para o M2 (não é entrega do M1). Quando vier, tabela dedicada
+  `liquidity_metrics` — nunca em `fundamental_metrics` (`fase3.md` §16, Handoff §13.3).
+- **"Investível" com presença em índice**: fora da V1 (Handoff §11).
+- **Preço de saída em delisting sem cotação**: pertence ao milestone do backtest, não ao M1.
+- **Split temporal** (`fase3.md` §46): após medir cobertura real do universo expandido.
