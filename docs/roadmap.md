@@ -485,11 +485,38 @@ linha pura de capex; taxa de dívida abaixo do risk-free antes e depois).
 
 **Pendências que atravessam para a Fase 3:**
 
-1. Registrar `20260827000006` no ledger `supabase_migrations.schema_migrations` (o
-   `exec_sql` RPC não tem permissão nesse schema — precisa do SQL editor). *Não bloqueia
-   nada: a migration já está aplicada no banco.*
+1. ~~Registrar `20260827000006` no ledger `supabase_migrations.schema_migrations`~~
+   **RESOLVIDO no M0 da Fase 3 (2026-08-30)** — ledger reconciliado: além de
+   `20260827000006` (dcf_and_macro), faltava também `20260826000001`
+   (exec_sql_higher_statement_timeout), ambos aplicados no banco mas não registrados.
+   Os 15 arquivos em `supabase/migrations/` agora batem com o ledger (exceto o drift
+   histórico de timestamp nos 2 arquivos de `news_backfill_checkpoints` /
+   `news_checkpoint_unsupported_date_range`, versões `..165922` / `..230457` no ledger).
 2. `quality_bank_v1` permanece `incomplete` por desenho até haver fonte de
    NIM/eficiência/Basileia/inadimplência (§9/§18).
 3. `cost_of_debt` evolui pela hierarquia do §36.6 quando houver dado de spread de
    emissão/CDS. Enquanto for proxy contábil, DCF de não-financeira é `estimated` — correto.
 4. `terminal_growth` único para todas as empresas (não diferenciado por setor/maturidade).
+
+---
+
+## Fase 3 — universo histórico + backtesting (**EM ANDAMENTO**, branch `fase3-backtesting-engine`)
+
+Spec mestre: [`fase3.md`](../fase3.md). Plano de execução: [`docs/fase3_plan.md`](fase3_plan.md).
+Ordem de milestones: `fase3.md` §88. Regra: nenhum milestone começa antes do anterior
+fechar com `pytest` + `ruff check .` + `mypy src` verdes (`fase3.md` §89).
+
+**Não fazer merge em `main` sem autorização explícita** (`fase3.md` §91).
+
+### M0 — checkpoint (**concluído**, 2026-08-30)
+
+- Branch `fase3-backtesting-engine` criada a partir de `main` (`f80c666`).
+- Baseline de `main`: **463 testes verdes**, `ruff check .` limpo, `mypy src` limpo (74 arquivos).
+- Housekeeping do `fase3.md` §2: ledger `supabase_migrations.schema_migrations` reconciliado
+  (via MCP `execute_sql` no projeto correto `bdppudbcjosznkfucekm` "B3 FOCUS" — a única
+  operação fora do caminho `stock_research.db`/REST, porque o RPC `exec_sql`/`exec_ddl` não
+  tem grant nesse schema). Adicionadas as 2 linhas faltantes: `20260826000001`
+  (`exec_sql_higher_statement_timeout`) e `20260827000006` (`dcf_and_macro`) — DDL de ambas
+  já estava aplicada no banco (as 4 tabelas de `..06` existem e estão populadas: 1/1/2/12
+  linhas). Nenhuma DDL nova rodada no M0.
+- Drift corrigido: `docs/data_dictionary.md` não diz mais "(migration ..06, não aplicada)".
