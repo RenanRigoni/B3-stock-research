@@ -454,37 +454,60 @@ def sync_historical_prices_cmd(
     instruments.active. Respeita a janela canonica (instrument_price_window):
     linha do provedor fora dela nao entra em daily_prices.
 
-    Bloco 2 desta rodada: so --dry-run (gera o batch file commitavel e o
-    ledger do que seria pedido). --execute e o Bloco 3."""
+    --dry-run gera o batch file commitavel + o ledger do que seria pedido, sem
+    rede. --execute baixa, particiona pela janela canonica, grava so o que esta
+    dentro, roda os 8 checks. CRITICAL para a expansao."""
     from stock_research.pipelines.price_backfill import run_backfill
 
     ids = [int(x) for x in instrument_id.split(",")] if instrument_id else None
-    try:
-        result = run_backfill(
-            label=label,
-            select=select,
-            instrument_ids=ids,
-            batch_file=batch_file,
-            as_of=as_of,
-            limit=limit,
-            offset=offset,
-            dry_run=dry_run,
-        )
-    except NotImplementedError as exc:
-        console.print(f"[yellow]{exc}[/]")
-        raise typer.Exit(code=2) from exc
-
-    console.print(
-        f"[green]dry-run[/] lote [bold]{result['label']}[/]: {result['candidates']} candidato(s), "
-        f"{result['seeded']} seeded"
+    result = run_backfill(
+        label=label,
+        select=select,
+        instrument_ids=ids,
+        batch_file=batch_file,
+        as_of=as_of,
+        limit=limit,
+        offset=offset,
+        dry_run=dry_run,
     )
-    console.print(f"  batch file: {result['batch_file']}")
-    console.print(f"  sha256: {result['batch_file_sha256']}")
-    console.print(f"  price_backfill_run_id: {result['backfill_run_id']}")
-    if result["without_price_window"]:
+
+    if result["dry_run"]:
         console.print(
-            f"  [yellow]sem instrument_price_window[/]: {result['without_price_window']}"
+            f"[green]dry-run[/] lote [bold]{result['label']}[/]: {result['candidates']} candidato(s), "
+            f"{result['seeded']} seeded"
         )
+        console.print(f"  batch file: {result['batch_file']}")
+        console.print(f"  sha256: {result['batch_file_sha256']}")
+        console.print(f"  price_backfill_run_id: {result['backfill_run_id']}")
+        if result["without_price_window"]:
+            console.print(
+                f"  [yellow]sem instrument_price_window[/]: {result['without_price_window']}"
+            )
+        return
+
+    t = result["totals"]
+    color = "red" if result["critical_total"] or result["aborted"] else "green"
+    console.print(
+        f"[{color}]execucao[/] lote [bold]{result['label']}[/] (run {result['backfill_run_id']}) "
+        f"status={result['status']}"
+    )
+    console.print(
+        f"  tentados={t['attempted']} resolved={t['succeeded']} vazias={t['empty_series']} "
+        f"symbol_not_found={t['symbol_not_found']} falhas={t['failed']} skip={t['skipped']}"
+    )
+    console.print(
+        f"  linhas gravadas={t['rows_written']}  fora da janela={t['rows_out_of_window']}  "
+        f"CRITICAL={result['critical_total']}"
+    )
+    for r in result["by_instrument"]:
+        extra = ""
+        if r.get("critical"):
+            extra = f"  [red]CRITICAL {r['critical']}[/]"
+        elif r.get("warn"):
+            extra = f"  [yellow]WARN {r['warn']}[/]"
+        console.print(f"    {r['ticker']}: {r['status']} {r.get('written', '')}{extra}")
+    if result["critical_total"] or result["aborted"]:
+        raise typer.Exit(code=1)
 
 
 @app.command(name="compute-liquidity")

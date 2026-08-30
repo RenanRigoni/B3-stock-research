@@ -37,6 +37,23 @@ price_validation:
   error_pct: 0.02
   default_days: 60
 
+# Backfill historico de precos (Fase 3 M2.1). Knobs PROPRIOS -- nao mexe no
+# `prices`/`providers.yfinance` da Fase 1. Reusa daily_prices/daily_returns/
+# trading_calendar/corporate_actions (nenhum sistema de preco novo).
+price_backfill:
+  provider: yfinance
+  # Mais conservador que a Fase 1 (1.0/s): 688 simbolos num backfill grande
+  # convidam bloqueio de IP. 0.5/s + jitter.
+  requests_per_second: 0.5
+  max_retries: 3
+  timeout_seconds: 30
+  # Circuit breaker: N respostas 429 consecutivas -> aborta o lote limpo,
+  # checkpoint intacto (abort de provedor, nao de instrumento).
+  consecutive_429_abort: 5
+  # Serie vazia NAO tem retry -- vazio e dado, nao falha.
+  # Chunk de upsert em daily_prices (latencia do backend REST).
+  upsert_chunk: 1000
+
 quality:
   # Retorno diario acima disso vira WARNING para inspecao manual.
   extreme_return_threshold: 0.20
